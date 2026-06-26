@@ -1,0 +1,2 @@
+{"_progress":true,"schema_version":"2.0","kind":"read","name":"Read","summary":"README.md","provider":"codex","next_action":"wait","directive":"BUSY -- do not interrupt; wait for output_file or final result."}
+{"_progress":true,"schema_version":"2.0","kind":"done","name":"done","summary":"completed","provider":"codex","next_action":"wait","directive":"BUSY -- do not interrupt; wait for output_file or final result."}

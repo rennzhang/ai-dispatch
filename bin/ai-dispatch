@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CACHE_DIR="${AI_DISPATCH_GO_CACHE_DIR:-${AI_DISPATCH_CACHE_DIR:-${HOME:-/tmp}/.ai-dispatch/cache}/go-build}"
+CACHE_BIN="$CACHE_DIR/ai-dispatch-go"
+
+needs_rebuild=0
+if [[ ! -x "$CACHE_BIN" ]]; then
+  needs_rebuild=1
+elif find "$ROOT/cmd" "$ROOT/internal" -type f -name '*.go' -newer "$CACHE_BIN" -print -quit | grep -q .; then
+  needs_rebuild=1
+elif [[ "$ROOT/go.mod" -nt "$CACHE_BIN" ]]; then
+  needs_rebuild=1
+fi
+
+if [[ "$needs_rebuild" == "1" ]]; then
+  mkdir -p "$CACHE_DIR"
+  tmp_bin="$CACHE_BIN.tmp.$$"
+  (
+    cd "$ROOT"
+    go build -o "$tmp_bin" ./cmd/ai-dispatch
+  )
+  mv "$tmp_bin" "$CACHE_BIN"
+fi
+
+export AI_DISPATCH_GO_PROVIDER_EXECUTION="${AI_DISPATCH_GO_PROVIDER_EXECUTION:-on}"
+export AI_DISPATCH_ROOT="${AI_DISPATCH_ROOT:-$ROOT}"
+exec "$CACHE_BIN" "$@"

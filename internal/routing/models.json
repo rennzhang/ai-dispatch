@@ -1,0 +1,268 @@
+{
+  "models": [
+    {
+      "key": "gpt5.5",
+      "label": "gpt5.5",
+      "actualModelId": "gpt-5.5",
+      "provider": "codex",
+      "providerTitle": "Codex",
+      "shortLabel": "gpt5.5",
+      "fullLabel": "OpenAI GPT-5.5",
+      "dispatchRunner": "codex",
+      "dispatchModel": "gpt-5.5",
+      "aliases": ["gpt", "gpt5", "gpt55", "gpt-5.5"]
+    },
+    {
+      "key": "gpt5.4",
+      "label": "gpt5.4",
+      "actualModelId": "gpt-5.4",
+      "provider": "codex",
+      "providerTitle": "Codex",
+      "shortLabel": "gpt5.4",
+      "fullLabel": "OpenAI GPT-5.4",
+      "dispatchRunner": "codex",
+      "dispatchModel": "gpt-5.4",
+      "aliases": ["gpt54", "gpt-5.4"]
+    },
+    {
+      "key": "opus4.7",
+      "label": "opus4.7",
+      "actualModelId": "claude-opus-4-7",
+      "provider": "claude",
+      "providerTitle": "Claude",
+      "shortLabel": "opus4.7",
+      "fullLabel": "Claude Opus 4.7",
+      "dispatchRunner": "claude",
+      "dispatchModel": "opus",
+      "aliases": ["opus", "opus4", "opus47", "opus-4.7"]
+    },
+    {
+      "key": "sonnet4.6",
+      "label": "sonnet4.6",
+      "actualModelId": "claude-sonnet-4-6",
+      "provider": "claude",
+      "providerTitle": "Claude",
+      "shortLabel": "sonnet4.6",
+      "fullLabel": "Claude Sonnet 4.6",
+      "dispatchRunner": "claude",
+      "dispatchModel": "sonnet",
+      "aliases": ["sonnet", "sonnet4", "sonnet46", "sonnet-4.6"]
+    },
+    {
+      "key": "gemini-flash",
+      "label": "gemini-flash",
+      "actualModelId": "google/gemini-3.5-flash",
+      "provider": "gemini",
+      "providerTitle": "Gemini",
+      "shortLabel": "gemini-flash",
+      "fullLabel": "Google Gemini 3.5 Flash",
+      "dispatchRunner": "antigravity",
+      "dispatchModel": "flash",
+      "aliases": ["geminiflash", "google/gemini-3.5-flash", "google/gemini-3.1-flash-preview"]
+    },
+    {
+      "key": "gemini-pro",
+      "label": "gemini-pro",
+      "actualModelId": "google/gemini-3.1-pro-preview",
+      "provider": "gemini",
+      "providerTitle": "Gemini",
+      "shortLabel": "gemini-pro",
+      "fullLabel": "Google Gemini Pro",
+      "dispatchRunner": "antigravity",
+      "dispatchModel": "pro",
+      "aliases": ["geminipro"]
+    },
+    {
+      "key": "mimo-v2.5-pro",
+      "label": "mimo-v2.5-pro",
+      "actualModelId": "openrouter/xiaomi/mimo-v2.5-pro",
+      "provider": "opencode",
+      "providerTitle": "Xiaomi",
+      "shortLabel": "mimo-v2.5-pro",
+      "fullLabel": "Xiaomi MiMo v2.5 Pro",
+      "dispatchRunner": "opencode",
+      "dispatchModel": "openrouter/xiaomi/mimo-v2.5-pro",
+      "stableTier": "stable",
+      "capabilities": ["frontend-ui", "visual-design", "layout", "light-agent", "low-cost"],
+      "recommendedFor": ["frontend-ui-production", "visual-candidate-batch", "opencode-default"],
+      "notes": [
+        "Frontend UI strength: balanced visual execution and reliable task completion.",
+        "Use as the stable default candidate for UI and visual design tasks."
+      ],
+      "aliases": [
+        "mimo",
+        "mimopro",
+        "xiaomi",
+        "xiaomimimo",
+        "mimo-pro",
+        "mimo-v2-pro",
+        "mimo-v2.5-pro",
+        "xiaomi/mimo-v2.5-pro",
+        "openrouter/xiaomi/mimo-v2.5-pro"
+      ]
+    },
+    {
+      "key": "kimi-k2.7-code",
+      "label": "kimi-k2.7-code",
+      "actualModelId": "openrouter/moonshotai/kimi-k2.7-code",
+      "provider": "opencode",
+      "providerTitle": "Moonshot",
+      "shortLabel": "kimi-k2.7-code",
+      "fullLabel": "Moonshot Kimi K2.7 Code",
+      "dispatchRunner": "opencode",
+      "dispatchModel": "openrouter/moonshotai/kimi-k2.7-code",
+      "stableTier": "stable",
+      "capabilities": ["frontend-ui", "visual-design", "layout", "coding", "planning"],
+      "recommendedFor": ["frontend-ui-high-ceiling", "visual-ideation", "coding"],
+      "notes": [
+        "Coding-focused Kimi K2 family model with strong long-context engineering performance.",
+        "Frontend UI strength: high visual ceiling and strong exploratory output.",
+        "Batch non-interactive UI tasks should use wall-time guard because it may over-iterate before exiting."
+      ],
+      "aliases": [
+        "kimi",
+        "kimi-k2.7",
+        "kimi-k2-7",
+        "kimi-k2.7-code",
+        "kimi-k2-7-code",
+        "kimi-k2.6",
+        "kimi-k2-6",
+        "moonshot",
+        "moonshotai/kimi-k2.7-code",
+        "openrouter/moonshotai/kimi-k2.7-code",
+        "moonshotai/kimi-k2.6",
+        "openrouter/moonshotai/kimi-k2.6"
+      ]
+    },
+    {
+      "key": "glm-5.2",
+      "label": "glm-5.2",
+      "actualModelId": "openrouter/z-ai/glm-5.2",
+      "provider": "opencode",
+      "providerTitle": "Z.AI",
+      "shortLabel": "glm-5.2",
+      "fullLabel": "Z.AI GLM 5.2",
+      "dispatchRunner": "opencode",
+      "dispatchModel": "openrouter/z-ai/glm-5.2",
+      "aliases": [
+        "glm",
+        "glm5",
+        "glm52",
+        "glm-52",
+        "z-ai/glm-5.2",
+        "openrouter/z-ai/glm-5.2",
+        "glm-5.1",
+        "glm51",
+        "glm-51",
+        "z-ai/glm-5.1",
+        "openrouter/z-ai/glm-5.1"
+      ]
+    },
+    {
+      "key": "qwen3.7-plus",
+      "label": "qwen3.7-plus",
+      "actualModelId": "openrouter/qwen/qwen3.7-plus",
+      "provider": "opencode",
+      "providerTitle": "Qwen",
+      "shortLabel": "qwen3.7-plus",
+      "fullLabel": "Qwen 3.7 Plus",
+      "dispatchRunner": "opencode",
+      "dispatchModel": "openrouter/qwen/qwen3.7-plus",
+      "aliases": [
+        "qwen",
+        "qwen3.7",
+        "qwen37",
+        "qwen37plus",
+        "qwen-3.7-plus",
+        "qwen/qwen3.7-plus",
+        "openrouter/qwen/qwen3.7-plus",
+        "qwen3.6-plus",
+        "qwen3.6",
+        "qwen36",
+        "qwen36plus",
+        "qwen-3.6-plus",
+        "qwen/qwen3.6-plus",
+        "openrouter/qwen/qwen3.6-plus"
+      ]
+    },
+    {
+      "key": "minimax-m3",
+      "label": "minimax-m3",
+      "actualModelId": "openrouter/minimax/minimax-m3",
+      "provider": "opencode",
+      "providerTitle": "MiniMax",
+      "shortLabel": "minimax-m3",
+      "fullLabel": "MiniMax M3",
+      "dispatchRunner": "opencode",
+      "dispatchModel": "openrouter/minimax/minimax-m3",
+      "aliases": [
+        "minimax",
+        "m3",
+        "minimax-m3",
+        "minimax/minimax-m3",
+        "openrouter/minimax/minimax-m3",
+        "minimax-m2.7",
+        "m2.7",
+        "minimax-m27",
+        "minimax/minimax-m2.7",
+        "openrouter/minimax/minimax-m2.7"
+      ]
+    },
+    {
+      "key": "grok-build-0.1",
+      "label": "grok-build-0.1",
+      "actualModelId": "openrouter/x-ai/grok-build-0.1",
+      "provider": "opencode",
+      "providerTitle": "xAI",
+      "shortLabel": "grok-build-0.1",
+      "fullLabel": "xAI Grok Build 0.1",
+      "dispatchRunner": "opencode",
+      "dispatchModel": "openrouter/x-ai/grok-build-0.1",
+      "stableTier": "stable",
+      "capabilities": ["agentic-coding", "software-engineering", "code-understanding", "analysis", "fast-analysis", "brainstorming"],
+      "recommendedFor": ["coding-agent", "engineering-analysis", "code-understanding", "fast-analysis"],
+      "notes": [
+        "Fast coding model trained for agentic software engineering workflows.",
+        "Use as a stable engineering analysis option when a second coding-oriented perspective is useful."
+      ],
+      "aliases": [
+        "grok",
+        "grok-build",
+        "grok-build-0.1",
+        "grok-build-01",
+        "x-ai/grok-build-0.1",
+        "openrouter/x-ai/grok-build-0.1",
+        "grok-4.3",
+        "grok4",
+        "grok-4-fast",
+        "grok-fast",
+        "x-ai/grok-4.3",
+        "openrouter/x-ai/grok-4.3"
+      ]
+    },
+    {
+      "key": "deepseek-v4-pro",
+      "label": "deepseek-v4-pro",
+      "actualModelId": "openrouter/deepseek/deepseek-v4-pro",
+      "provider": "opencode",
+      "providerTitle": "DeepSeek",
+      "shortLabel": "deepseek-v4-pro",
+      "fullLabel": "DeepSeek V4 Pro",
+      "dispatchRunner": "opencode",
+      "dispatchModel": "openrouter/deepseek/deepseek-v4-pro",
+      "aliases": [
+        "deepseek",
+        "deepseek-v4",
+        "deepseek-v4-pro",
+        "deepseek/deepseek-v4-pro",
+        "openrouter/deepseek/deepseek-v4-pro"
+      ]
+    }
+  ],
+  "defaultModelByProvider": {
+    "claude": "sonnet4.6",
+    "codex": "gpt5.5",
+    "gemini": "gemini-flash",
+    "opencode": "mimo-v2.5-pro"
+  }
+}

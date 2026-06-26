@@ -1,0 +1,15 @@
+{
+  "schema_version": "2.0",
+  "ok": false,
+  "status": "error",
+  "provider_used": "",
+  "route_trace": [],
+  "route_steps": [],
+  "degraded": false,
+  "exit_code": 2,
+  "duration_ms": 0,
+  "stderr": "Either prompt, --prompt-file, or stdin input is required",
+  "warnings": [],
+  "next_action": "fix_input",
+  "failure_class": "input"
+}
