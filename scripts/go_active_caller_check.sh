@@ -55,7 +55,7 @@ expect_disabled_plain() {
     cat "$tmpdir/$name.stderr"
     exit 1
   fi
-  if ! rg -q "disabled|provider execution" "$tmpdir/$name.stderr"; then
+  if ! grep -Eq "disabled|provider execution" "$tmpdir/$name.stderr"; then
     echo "[active-caller] expected disabled stderr"
     cat "$tmpdir/$name.stdout"
     cat "$tmpdir/$name.stderr"
