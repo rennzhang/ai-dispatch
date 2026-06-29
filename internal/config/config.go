@@ -10,11 +10,10 @@ import (
 const Version = 1
 
 type Config struct {
-	Version          int          `json:"version"`
-	ClaudeTransport  string       `json:"claude_transport"`
-	TrustedWorkspace bool         `json:"trusted_workspace"`
-	Models           ModelsConfig `json:"models"`
-	Hooks            HooksConfig  `json:"hooks"`
+	Version         int          `json:"version"`
+	ClaudeTransport string       `json:"claude_transport"`
+	Models          ModelsConfig `json:"models"`
+	Hooks           HooksConfig  `json:"hooks"`
 }
 
 type ModelsConfig struct {
@@ -26,9 +25,8 @@ type HooksConfig struct {
 }
 
 type InitOptions struct {
-	ClaudeTransport  string
-	TrustedWorkspace bool
-	Force            bool
+	ClaudeTransport string
+	Force           bool
 }
 
 func HomeDir() string {
@@ -76,11 +74,10 @@ func HooksDir() string {
 
 func Default() Config {
 	return Config{
-		Version:          Version,
-		ClaudeTransport:  "print",
-		TrustedWorkspace: false,
-		Models:           ModelsConfig{},
-		Hooks:            HooksConfig{},
+		Version:         Version,
+		ClaudeTransport: "print",
+		Models:          ModelsConfig{},
+		Hooks:           HooksConfig{},
 	}
 }
 
@@ -111,7 +108,6 @@ func Init(opts InitOptions) (Config, error) {
 	if opts.ClaudeTransport != "" {
 		cfg.ClaudeTransport = opts.ClaudeTransport
 	}
-	cfg.TrustedWorkspace = opts.TrustedWorkspace
 	for _, dir := range []string{HomeDir(), RunsDir(), CacheDir(), LogsDir(), HooksDir()} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return Config{}, err

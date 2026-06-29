@@ -36,8 +36,12 @@ func MainWithInput(argv []string, stdout io.Writer, stderr io.Writer, stdin io.R
 		return 0
 	}
 	switch args[0] {
+	case "config":
+		return configCommand(args[1:], stdout, stderr)
 	case "doctor":
 		return doctor(args[1:], stdout, stderr)
+	case "guide":
+		return guide(args[1:], stdout, stderr)
 	case "init":
 		return initConfig(args[1:], stdout, stderr)
 	case "models":
@@ -61,6 +65,8 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  ai-dispatch send <target> [prompt] [flags]")
 	fmt.Fprintln(w, "  ai-dispatch resume --session-id <id> [--target <target>] [prompt] [flags]")
+	fmt.Fprintln(w, "  ai-dispatch config path|show")
+	fmt.Fprintln(w, "  ai-dispatch guide models")
 	fmt.Fprintln(w, "  ai-dispatch runs list|show|tail|failures")
 	fmt.Fprintln(w, "  ai-dispatch init [--claude-transport print|pty|auto|disabled]")
 	fmt.Fprintln(w, "  ai-dispatch skill install --target codex|claude|all")
@@ -78,7 +84,6 @@ func initConfig(argv []string, stdout io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	claudeTransport := fs.String("claude-transport", "print", "print, pty, auto, or disabled")
-	trustedWorkspace := fs.Bool("trusted-workspace", false, "allow providers to run in trusted agent workspace mode")
 	force := fs.Bool("force", false, "overwrite existing config")
 	format := fs.String("format", "text", "text or json")
 	if err := fs.Parse(argv); err != nil {
@@ -91,22 +96,20 @@ func initConfig(argv []string, stdout io.Writer, stderr io.Writer) int {
 		return emitCLIError(stdout, stderr, *format == "json", "--claude-transport must be print, pty, auto, or disabled", 2)
 	}
 	cfg, err := config.Init(config.InitOptions{
-		ClaudeTransport:  *claudeTransport,
-		TrustedWorkspace: *trustedWorkspace,
-		Force:            *force,
+		ClaudeTransport: *claudeTransport,
+		Force:           *force,
 	})
 	if err != nil {
 		return emitCLIError(stdout, stderr, *format == "json", err.Error(), 1)
 	}
 	payload := map[string]any{
-		"ok":                true,
-		"home":              config.HomeDir(),
-		"config":            config.ConfigPath(),
-		"runs":              config.RunsDir(),
-		"cache":             config.CacheDir(),
-		"logs":              config.LogsDir(),
-		"claude_transport":  cfg.ClaudeTransport,
-		"trusted_workspace": cfg.TrustedWorkspace,
+		"ok":               true,
+		"home":             config.HomeDir(),
+		"config":           config.ConfigPath(),
+		"runs":             config.RunsDir(),
+		"cache":            config.CacheDir(),
+		"logs":             config.LogsDir(),
+		"claude_transport": cfg.ClaudeTransport,
 	}
 	if *format == "json" {
 		return writeJSON(stdout, payload, 0)
@@ -114,6 +117,34 @@ func initConfig(argv []string, stdout io.Writer, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "ai-dispatch initialized at %s\n", config.HomeDir())
 	fmt.Fprintf(stdout, "config: %s\n", config.ConfigPath())
 	return 0
+}
+
+func configCommand(argv []string, stdout io.Writer, stderr io.Writer) int {
+	if len(argv) == 0 || argv[0] == "--help" || argv[0] == "-h" || argv[0] == "help" {
+		fmt.Fprintln(stdout, "Usage:")
+		fmt.Fprintln(stdout, "  ai-dispatch config path")
+		fmt.Fprintln(stdout, "  ai-dispatch config show")
+		return 0
+	}
+	switch argv[0] {
+	case "path":
+		fmt.Fprintln(stdout, config.ConfigPath())
+		return 0
+	case "show":
+		cfg, err := config.Load()
+		if err != nil {
+			return emitCLIError(stdout, stderr, false, err.Error(), 1)
+		}
+		data, err := json.MarshalIndent(cfg, "", "  ")
+		if err != nil {
+			return emitCLIError(stdout, stderr, false, err.Error(), 1)
+		}
+		fmt.Fprintln(stdout, string(data))
+		return 0
+	default:
+		fmt.Fprintf(stderr, "ai-dispatch config: unknown subcommand %q\n", argv[0])
+		return 2
+	}
 }
 
 func doctor(argv []string, stdout io.Writer, stderr io.Writer) int {

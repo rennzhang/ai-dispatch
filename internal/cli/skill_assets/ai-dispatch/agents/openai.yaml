@@ -1,3 +1,3 @@
 display_name: ai-dispatch
-short_description: Dispatch work to local AI coding CLIs through a shared runtime.
-default_prompt: Use ai-dispatch to run a model-backed coding, review, or research task and report the actual provider, model, route, and result.
+short_description: 通过共享本地运行时把任务派发给 AI coding CLI。
+default_prompt: 使用 ai-dispatch 执行一个代码、review 或调研任务，并汇报真实 provider、model、路由和结果。

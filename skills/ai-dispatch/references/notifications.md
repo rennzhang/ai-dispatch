@@ -1,8 +1,8 @@
-# Notification Hooks
+# 通知 Hook
 
-ai-dispatch keeps notification integration generic. A hook command must accept event JSON on stdin and exit `0` on success.
+ai-dispatch 只保留通用通知接入，不内置具体平台逻辑。hook 命令必须从 stdin 接收事件 JSON，成功时退出码为 `0`。
 
-Minimum event shape:
+最小事件结构：
 
 ```json
 {
@@ -17,11 +17,11 @@ Minimum event shape:
 }
 ```
 
-Do not include prompt text, response text, secrets, full stderr, personal paths, or raw config in notification payloads.
+通知 payload 禁止包含 prompt 正文、模型回复正文、secret、完整 stderr、个人路径或原始配置。
 
-Known local integrations:
+## 已知本地接入
 
-- Telegram: implement a hook that reads stdin JSON and sends a short status message to the configured chat.
-- Feishu/Lark: implement a hook that reads stdin JSON and sends a short card or text message to the configured recipient.
+- Telegram：实现一个 hook，从 stdin 读取 JSON，给配置好的 chat 发送简短状态消息。
+- 飞书 / Lark：实现一个 hook，从 stdin 读取 JSON，给配置好的接收方发送简短卡片或文本。
 
-For other platforms, build the same stdin JSON contract; do not add platform-specific behavior inside ai-dispatch.
+其他平台按同一份 stdin JSON 契约接入；不要把平台私有逻辑写进 ai-dispatch。

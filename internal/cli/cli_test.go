@@ -39,7 +39,9 @@ func TestHelpFlagsExitCleanly(t *testing.T) {
 	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
 	cases := [][]string{
 		{"--help"},
+		{"config", "--help"},
 		{"send", "--help"},
+		{"guide", "--help"},
 		{"resume", "--help"},
 		{"doctor", "--help"},
 		{"models", "--help"},
@@ -55,6 +57,62 @@ func TestHelpFlagsExitCleanly(t *testing.T) {
 		}
 		if strings.Contains(stderr.String(), "flag: help requested") {
 			t.Fatalf("args=%v stderr=%s", args, stderr.String())
+		}
+	}
+}
+
+func TestInitConfigDoesNotExposeTrustedWorkspace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AI_DISPATCH_HOME", home)
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"init", "--format", "json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if strings.Contains(stdout.String(), "trusted_workspace") {
+		t.Fatalf("init output should not expose trusted_workspace: %s", stdout.String())
+	}
+	data, err := os.ReadFile(filepath.Join(home, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "trusted_workspace") {
+		t.Fatalf("config should not expose trusted_workspace: %s", string(data))
+	}
+}
+
+func TestConfigPathAndShow(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AI_DISPATCH_HOME", home)
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"config", "path"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	if strings.TrimSpace(stdout.String()) != filepath.Join(home, "config.json") {
+		t.Fatalf("stdout=%s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = Main([]string{"config", "show"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"claude_transport": "print"`) || strings.Contains(stdout.String(), "trusted_workspace") {
+		t.Fatalf("stdout=%s", stdout.String())
+	}
+}
+
+func TestGuideModelsPrintsBundledReference(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"guide", "models"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	text := stdout.String()
+	for _, want := range []string{"# 模型路由", "## 默认路由", "gpt5.5", "mimo", "provider_used"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in guide:\n%s", want, text)
 		}
 	}
 }
