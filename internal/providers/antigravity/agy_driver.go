@@ -27,6 +27,7 @@ type agyDriverConfig struct {
 	PromptFile   string
 	SessionID    string
 	Model        string
+	Project      string
 	PrintTimeout string
 	AgyBin       string
 	AgyRoot      string
@@ -52,6 +53,7 @@ func parseAgyDriverArgs(argv []string, stderr io.Writer) (agyDriverConfig, error
 	promptFile := fs.String("prompt-file", "", "prompt file")
 	sessionID := fs.String("session-id", "", "conversation id")
 	model := fs.String("model", "", "model")
+	project := fs.String("project", "", "project working directory")
 	printTimeout := fs.String("print-timeout", "", "agy print timeout")
 	agyBin := fs.String("agy-bin", "", "agy binary")
 	agyRoot := fs.String("agy-root", "", "agy app data root")
@@ -63,6 +65,7 @@ func parseAgyDriverArgs(argv []string, stderr io.Writer) (agyDriverConfig, error
 		PromptFile:   *promptFile,
 		SessionID:    *sessionID,
 		Model:        *model,
+		Project:      *project,
 		PrintTimeout: *printTimeout,
 		AgyBin:       *agyBin,
 		AgyRoot:      *agyRoot,
@@ -117,6 +120,9 @@ func runAgyDriver(cfg agyDriverConfig, stdout io.Writer, stderr io.Writer) error
 	}
 	if cfg.SessionID != "" {
 		args = append(args, "--conversation", cfg.SessionID)
+	}
+	if cfg.Project != "" {
+		args = append(args, "--project", cfg.Project)
 	}
 	args = append(args, "--print", cfg.Prompt)
 

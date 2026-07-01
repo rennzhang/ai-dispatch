@@ -35,6 +35,23 @@ func TestDoctorJSON(t *testing.T) {
 	}
 }
 
+func TestDoctorJSONReportsEnabledProviderExecution(t *testing.T) {
+	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	t.Setenv("AI_DISPATCH_GO_PROVIDER_EXECUTION", "on")
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"doctor", "--format", "json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["provider_execution"] != "enabled" {
+		t.Fatalf("payload=%v", payload)
+	}
+}
+
 func TestHelpFlagsExitCleanly(t *testing.T) {
 	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
 	cases := [][]string{

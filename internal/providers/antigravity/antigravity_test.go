@@ -21,6 +21,7 @@ func TestBuildUsesAgyDriver(t *testing.T) {
 			Provider:  "antigravity",
 			Model:     "pro",
 		},
+		CWD:            "/tmp/project",
 		SessionID:      "session-1",
 		TimeoutSeconds: 42,
 		ProviderOptions: map[string]string{
@@ -36,6 +37,7 @@ func TestBuildUsesAgyDriver(t *testing.T) {
 		"/tmp/fake-agy-driver",
 		"--model pro",
 		"--session-id session-1",
+		"--project /tmp/project",
 		"--print-timeout 42s",
 		"--agy-bin /tmp/agy",
 		"--agy-root /tmp/agy-root",
@@ -87,6 +89,7 @@ log_file=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --log-file) log_file="$2"; shift 2 ;;
+    --project) project="$2"; shift 2 ;;
     --print) prompt="$2"; shift 2 ;;
     *) shift ;;
   esac
@@ -109,7 +112,7 @@ echo "stdout response"
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	code := RunAgyDriverCLI([]string{"--agy-bin", fakeAgy, "--agy-root", root, "--model", "pro", "--prompt", "hello"}, &stdout, &stderr)
+	code := RunAgyDriverCLI([]string{"--agy-bin", fakeAgy, "--agy-root", root, "--model", "pro", "--project", root, "--prompt", "hello"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
 	}

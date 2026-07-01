@@ -28,6 +28,9 @@ func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 	if req.SessionID != "" {
 		args = append(args, "--session-id", req.SessionID)
 	}
+	if req.CWD != "" {
+		args = append(args, "--project", req.CWD)
+	}
 	if req.TimeoutSeconds > 0 {
 		args = append(args, "--print-timeout", durationArg(req.TimeoutSeconds))
 	}

@@ -161,7 +161,7 @@ func doctor(argv []string, stdout io.Writer, stderr io.Writer) int {
 	payload := map[string]any{
 		"ok":                 true,
 		"runtime":            "go",
-		"provider_execution": "disabled_by_default",
+		"provider_execution": providerExecutionStatus(),
 		"contract":           "2.0",
 		"home":               config.HomeDir(),
 		"config_path":        config.ConfigPath(),
@@ -180,6 +180,13 @@ func doctor(argv []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stdout, "ai-dispatch go: ok")
 	return 0
+}
+
+func providerExecutionStatus() string {
+	if os.Getenv("AI_DISPATCH_GO_PROVIDER_EXECUTION") == "on" {
+		return "enabled"
+	}
+	return "disabled_by_default"
 }
 
 func claudeEnvStatus() map[string]any {

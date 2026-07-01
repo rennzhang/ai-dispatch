@@ -123,9 +123,24 @@ scripts/install.sh
 手动安装：
 
 ```bash
-go build -o ~/.ai-dispatch/bin/ai-dispatch ./cmd/ai-dispatch
-~/.ai-dispatch/bin/ai-dispatch init --claude-transport print
-~/.ai-dispatch/bin/ai-dispatch skill install --target all
+HOME_DIR="${AI_DISPATCH_HOME:-${HOME}/.ai-dispatch}"
+CACHE_BASE="${AI_DISPATCH_CACHE_DIR:-$HOME_DIR/cache}"
+CACHE_DIR="${AI_DISPATCH_GO_CACHE_DIR:-$CACHE_BASE/go-build}"
+mkdir -p "$HOME_DIR/bin" "$CACHE_DIR"
+go build -o "$CACHE_DIR/ai-dispatch-go" ./cmd/ai-dispatch
+cat > "$HOME_DIR/bin/ai-dispatch" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+HOME_DIR="${AI_DISPATCH_HOME:-${HOME}/.ai-dispatch}"
+CACHE_DIR="${AI_DISPATCH_GO_CACHE_DIR:-${AI_DISPATCH_CACHE_DIR:-$HOME_DIR/cache}/go-build}"
+CACHE_BIN="$CACHE_DIR/ai-dispatch-go"
+export AI_DISPATCH_GO_PROVIDER_EXECUTION="${AI_DISPATCH_GO_PROVIDER_EXECUTION:-on}"
+export AI_DISPATCH_ROOT="${AI_DISPATCH_ROOT:-$HOME_DIR}"
+exec "$CACHE_BIN" "$@"
+EOF
+chmod +x "$HOME_DIR/bin/ai-dispatch"
+"$HOME_DIR/bin/ai-dispatch" init --claude-transport print
+"$HOME_DIR/bin/ai-dispatch" skill install --target all
 ```
 
 ## 配置
