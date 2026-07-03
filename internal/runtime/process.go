@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	"os/exec"
 	"sync"
 	"syscall"
@@ -61,24 +60,16 @@ func RunProcess(ctx context.Context, spec CommandSpec, opts RunOptions, hooks St
 	if len(spec.Stdin) > 0 {
 		cmd.Stdin = bytes.NewReader(spec.Stdin)
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return RunResult{ExitCode: 1, Error: err.Error()}
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return RunResult{ExitCode: 1, Error: err.Error()}
-	}
+
+	activity := make(chan struct{}, 16)
+	stdout := &captureWriter{hook: hooks.Stdout, activity: activity}
+	stderr := &captureWriter{hook: hooks.Stderr, activity: activity}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+
 	if err := cmd.Start(); err != nil {
 		return RunResult{ExitCode: 127, Error: err.Error()}
 	}
-
-	activity := make(chan struct{}, 16)
-	var outBuf, errBuf bytes.Buffer
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go copyStream(&wg, stdout, &outBuf, hooks.Stdout, activity)
-	go copyStream(&wg, stderr, &errBuf, hooks.Stderr, activity)
 
 	done := make(chan error, 1)
 	go func() {
@@ -97,10 +88,9 @@ func RunProcess(ctx context.Context, spec CommandSpec, opts RunOptions, hooks St
 	for {
 		select {
 		case err := <-done:
-			wg.Wait()
 			result.ExitCode = exitCode(err)
-			result.Stdout = outBuf.Bytes()
-			result.Stderr = errBuf.Bytes()
+			result.Stdout = stdout.Bytes()
+			result.Stderr = stderr.Bytes()
 			result.DurationMS = time.Since(started).Milliseconds()
 			if err != nil && result.ExitCode == 0 {
 				result.Error = err.Error()
@@ -108,13 +98,15 @@ func RunProcess(ctx context.Context, spec CommandSpec, opts RunOptions, hooks St
 			return result
 		case <-runCtx.Done():
 			terminateProcessGroup(cmd.Process.Pid)
-			wg.Wait()
-			result = timeoutResult(started, outBuf.Bytes(), errBuf.Bytes(), true, false)
+			_ = cmd.Process.Kill()
+			<-done
+			result = timeoutResult(started, stdout.Bytes(), stderr.Bytes(), true, false)
 			return result
 		case <-timerC:
 			terminateProcessGroup(cmd.Process.Pid)
-			wg.Wait()
-			result = timeoutResult(started, outBuf.Bytes(), errBuf.Bytes(), false, true)
+			_ = cmd.Process.Kill()
+			<-done
+			result = timeoutResult(started, stdout.Bytes(), stderr.Bytes(), false, true)
 			return result
 		case <-activity:
 			if timer != nil {
@@ -130,26 +122,32 @@ func RunProcess(ctx context.Context, spec CommandSpec, opts RunOptions, hooks St
 	}
 }
 
-func copyStream(wg *sync.WaitGroup, reader io.Reader, buf *bytes.Buffer, hook func([]byte), activity chan<- struct{}) {
-	defer wg.Done()
-	tmp := make([]byte, 4096)
-	for {
-		n, err := reader.Read(tmp)
-		if n > 0 {
-			chunk := append([]byte(nil), tmp[:n]...)
-			buf.Write(chunk)
-			if hook != nil {
-				hook(chunk)
-			}
-			select {
-			case activity <- struct{}{}:
-			default:
-			}
-		}
-		if err != nil {
-			return
-		}
+type captureWriter struct {
+	mu       sync.Mutex
+	buf      bytes.Buffer
+	hook     func([]byte)
+	activity chan<- struct{}
+}
+
+func (w *captureWriter) Write(p []byte) (int, error) {
+	chunk := append([]byte(nil), p...)
+	w.mu.Lock()
+	_, _ = w.buf.Write(chunk)
+	w.mu.Unlock()
+	if w.hook != nil {
+		w.hook(chunk)
 	}
+	select {
+	case w.activity <- struct{}{}:
+	default:
+	}
+	return len(p), nil
+}
+
+func (w *captureWriter) Bytes() []byte {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]byte(nil), w.buf.Bytes()...)
 }
 
 func timeoutResult(started time.Time, stdout []byte, stderr []byte, fixed bool, activity bool) RunResult {
