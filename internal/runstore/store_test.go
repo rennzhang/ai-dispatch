@@ -1,6 +1,9 @@
 package runstore
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,6 +69,19 @@ func TestListFiltered(t *testing.T) {
 	}
 }
 
+func TestListFilteredReportsCorruptRunDirectories(t *testing.T) {
+	root := t.TempDir()
+	runID := "run-corrupt"
+	if err := os.Mkdir(filepath.Join(root, runID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := ListFiltered(root, ListFilter{})
+	if err == nil || !strings.Contains(err.Error(), runID) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestWriteResultWithTask(t *testing.T) {
 	root := t.TempDir()
 	result := contract.SuccessResult("hello")
@@ -98,5 +114,20 @@ func TestFindBySessionID(t *testing.T) {
 	}
 	if !ok || record.Result == nil || record.Result.ProviderUsed != "codex" {
 		t.Fatalf("record=%+v ok=%v", record, ok)
+	}
+}
+
+func TestReadRejectsPathTraversal(t *testing.T) {
+	if _, err := Read(t.TempDir(), "../outside"); err == nil {
+		t.Fatal("expected invalid run id error")
+	}
+}
+
+func TestGeneratedRunIDsIncludeEntropy(t *testing.T) {
+	now := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
+	first := NewRunID(now)
+	second := NewRunID(now)
+	if first == second {
+		t.Fatalf("run ids should differ: %q", first)
 	}
 }

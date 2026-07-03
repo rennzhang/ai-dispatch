@@ -7,6 +7,7 @@ import (
 )
 
 func TestResolveProvider(t *testing.T) {
+	isolateConfig(t)
 	target, err := Resolve("codex", "gpt-5.5")
 	if err != nil {
 		t.Fatal(err)
@@ -17,6 +18,7 @@ func TestResolveProvider(t *testing.T) {
 }
 
 func TestResolveCodexDefaultsToGPT55(t *testing.T) {
+	isolateConfig(t)
 	target, err := Resolve("codex", "")
 	if err != nil {
 		t.Fatal(err)
@@ -26,25 +28,27 @@ func TestResolveCodexDefaultsToGPT55(t *testing.T) {
 	}
 }
 
-func TestResolveAlias(t *testing.T) {
+func TestResolveBuiltinAlias(t *testing.T) {
+	isolateConfig(t)
 	target, err := Resolve("gpt5.5", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.Provider != "codex" || target.Model != "gpt-5.5" {
+	if target.Provider != "codex" || target.Model != "gpt-5.5" || target.Source != "registry" {
 		t.Fatalf("target=%+v", target)
 	}
 }
 
 func TestRejectModelWithModelTarget(t *testing.T) {
+	isolateConfig(t)
 	if _, err := Resolve("gpt-5.5", "other"); err == nil {
 		t.Fatal("expected error")
 	}
 }
 
-func TestResolveRegistryAlias(t *testing.T) {
-	t.Setenv("AI_DISPATCH_MODEL_REGISTRY", writeRegistry(t))
-	target, err := Resolve("mimo", "")
+func TestResolveBuiltinSpecificMiMoTarget(t *testing.T) {
+	isolateConfig(t)
+	target, err := Resolve("mimo-openrouter-pro", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,8 +57,15 @@ func TestResolveRegistryAlias(t *testing.T) {
 	}
 }
 
+func TestResolveDoesNotBindAmbiguousMiMoAlias(t *testing.T) {
+	isolateConfig(t)
+	if _, err := Resolve("mimo", ""); err == nil {
+		t.Fatal("expected ambiguous mimo alias to be unsupported without config.models")
+	}
+}
+
 func TestResolveGeminiRegistryTarget(t *testing.T) {
-	t.Setenv("AI_DISPATCH_MODEL_REGISTRY", writeRegistry(t))
+	isolateConfig(t)
 	target, err := Resolve("gemini-pro", "")
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +76,7 @@ func TestResolveGeminiRegistryTarget(t *testing.T) {
 }
 
 func TestResolveClaudeRegistryTargetUsesCLIModelAlias(t *testing.T) {
-	t.Setenv("AI_DISPATCH_MODEL_REGISTRY", writeRegistry(t))
+	isolateConfig(t)
 	target, err := Resolve("sonnet4.6", "")
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +87,7 @@ func TestResolveClaudeRegistryTargetUsesCLIModelAlias(t *testing.T) {
 }
 
 func TestResolveClaudeActualIDTargetPreservesExplicitModelID(t *testing.T) {
-	t.Setenv("AI_DISPATCH_MODEL_REGISTRY", writeRegistry(t))
+	isolateConfig(t)
 	target, err := Resolve("claude-opus-4-7", "")
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +98,7 @@ func TestResolveClaudeActualIDTargetPreservesExplicitModelID(t *testing.T) {
 }
 
 func TestResolveProviderExplicitActualModelIDPreservesModel(t *testing.T) {
-	t.Setenv("AI_DISPATCH_MODEL_REGISTRY", writeRegistry(t))
+	isolateConfig(t)
 	target, err := Resolve("claude", "claude-opus-4-7")
 	if err != nil {
 		t.Fatal(err)
@@ -98,6 +109,7 @@ func TestResolveProviderExplicitActualModelIDPreservesModel(t *testing.T) {
 }
 
 func TestResolveAntigravityProvider(t *testing.T) {
+	isolateConfig(t)
 	target, err := Resolve("antigravity", "pro")
 	if err != nil {
 		t.Fatal(err)
@@ -108,6 +120,7 @@ func TestResolveAntigravityProvider(t *testing.T) {
 }
 
 func TestResolveGeminiProviderAlias(t *testing.T) {
+	isolateConfig(t)
 	target, err := Resolve("gemini", "pro")
 	if err != nil {
 		t.Fatal(err)
@@ -118,6 +131,7 @@ func TestResolveGeminiProviderAlias(t *testing.T) {
 }
 
 func TestResolveGeminiGoogleModel(t *testing.T) {
+	isolateConfig(t)
 	target, err := Resolve("google/gemini-3.1-pro-preview", "")
 	if err != nil {
 		t.Fatal(err)
@@ -127,48 +141,127 @@ func TestResolveGeminiGoogleModel(t *testing.T) {
 	}
 }
 
-func TestSupportedTargetsIncludesGeminiAliases(t *testing.T) {
-	t.Setenv("AI_DISPATCH_MODEL_REGISTRY", writeRegistry(t))
-	targets := SupportedTargets()
-	if !contains(targets, "mimo-v2.5-pro") {
-		t.Fatalf("targets=%v", targets)
-	}
-	if !contains(targets, "gemini-pro") || !contains(targets, "gemini-flash") {
-		t.Fatalf("gemini aliases should be visible: %v", targets)
-	}
-	if !contains(targets, "mimo") {
-		t.Fatalf("registry aliases should be visible: %v", targets)
-	}
-}
-
-func TestResolveUsesConfiguredRegistry(t *testing.T) {
-	t.Setenv("AI_DISPATCH_MODEL_REGISTRY", writeRegistry(t))
-	t.Setenv("AI_DISPATCH_CONFIG", filepath.Join(t.TempDir(), "missing-config.json"))
-	data := `{
-  "models": [
-    {
-      "key": "mimo-v2.5-pro",
-      "actualModelId": "openrouter/xiaomi/mimo-v2.5-pro",
-      "provider": "opencode",
-      "dispatchRunner": "opencode",
-      "dispatchModel": "openrouter/xiaomi/mimo-v2.5-pro",
-      "aliases": ["mimo"]
-    }
-  ]
-}`
-	registryPath := filepath.Join(t.TempDir(), "registry.json")
-	if err := os.WriteFile(registryPath, []byte(data), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("AI_DISPATCH_MODEL_REGISTRY", registryPath)
-
-	target, err := Resolve("mimo", "")
+func TestResolveConfiguredModelOverridesBuiltin(t *testing.T) {
+	writeConfig(t, `{
+  "version": 1,
+  "claude_transport": "print",
+  "models": {
+    "gpt5.5": [
+      { "provider": "opencode", "model": "openai/gpt-5.5" }
+    ]
+  },
+  "providers": {}
+}`)
+	target, err := Resolve("gpt5.5", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.Provider != "opencode" || target.Model != "openrouter/xiaomi/mimo-v2.5-pro" || target.Source != "registry" {
+	if target.Provider != "opencode" || target.Model != "openai/gpt-5.5" || target.Source != "config" {
 		t.Fatalf("target=%+v", target)
 	}
+}
+
+func TestResolveConfiguredModelCandidates(t *testing.T) {
+	writeConfig(t, `{
+  "version": 1,
+  "claude_transport": "print",
+  "models": {
+    "mimo-pro": [
+      { "provider": "opencode", "model": "openrouter/xiaomi/mimo-v2.5-pro" },
+      { "provider": "opencode", "model": "opencode/mimo-v2.5-free" }
+    ]
+  },
+  "providers": {}
+}`)
+	target, err := Resolve("mimo-pro", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Provider != "opencode" || target.Model != "openrouter/xiaomi/mimo-v2.5-pro" || len(target.Candidates) != 2 {
+		t.Fatalf("target=%+v", target)
+	}
+	candidates := CandidateTargets(target)
+	if len(candidates) != 2 || candidates[1].Model != "opencode/mimo-v2.5-free" {
+		t.Fatalf("candidates=%+v", candidates)
+	}
+}
+
+func TestResolveProviderUsesConfiguredModelAlias(t *testing.T) {
+	writeConfig(t, `{
+  "version": 1,
+  "claude_transport": "print",
+  "models": {
+    "mimo-pro": [
+      { "provider": "opencode", "model": "openrouter/xiaomi/mimo-v2.5-pro" }
+    ]
+  },
+  "providers": {}
+}`)
+	target, err := Resolve("opencode", "mimo-pro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Provider != "opencode" || target.Model != "openrouter/xiaomi/mimo-v2.5-pro" || target.Source != "provider" {
+		t.Fatalf("target=%+v", target)
+	}
+}
+
+func TestResolveProviderPreservesConfiguredCandidateChain(t *testing.T) {
+	writeConfig(t, `{
+  "version": 1,
+  "claude_transport": "print",
+  "models": {
+    "mimo-pro": [
+      { "provider": "opencode", "model": "openrouter/xiaomi/mimo-v2.5-pro" },
+      { "provider": "opencode", "model": "opencode/mimo-v2.5-free" }
+    ]
+  },
+  "providers": {}
+}`)
+	target, err := Resolve("opencode", "mimo-pro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates := CandidateTargets(target)
+	if len(candidates) != 2 || candidates[1].Model != "opencode/mimo-v2.5-free" {
+		t.Fatalf("target=%+v candidates=%+v", target, candidates)
+	}
+}
+
+func TestSupportedTargetsIncludesConfigModelsAndBuiltins(t *testing.T) {
+	writeConfig(t, `{
+  "version": 1,
+  "claude_transport": "print",
+  "models": {
+    "mimo-pro": [
+      { "provider": "opencode", "model": "openrouter/xiaomi/mimo-v2.5-pro" }
+    ]
+  },
+  "providers": {}
+}`)
+	targets := SupportedTargets()
+	for _, target := range []string{"mimo-pro", "mimo-openrouter-pro", "mimo-opencode-free", "gemini-pro"} {
+		if !contains(targets, target) {
+			t.Fatalf("missing %q in targets=%v", target, targets)
+		}
+	}
+	if contains(targets, "mimo") {
+		t.Fatalf("ambiguous mimo alias should not be advertised: %v", targets)
+	}
+}
+
+func isolateConfig(t *testing.T) {
+	t.Helper()
+	t.Setenv("AI_DISPATCH_CONFIG", filepath.Join(t.TempDir(), "missing-config.json"))
+}
+
+func writeConfig(t *testing.T, data string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AI_DISPATCH_CONFIG", path)
 }
 
 func contains(values []string, target string) bool {
@@ -178,49 +271,4 @@ func contains(values []string, target string) bool {
 		}
 	}
 	return false
-}
-
-func writeRegistry(t *testing.T) string {
-	t.Helper()
-	path := t.TempDir() + "/registry.json"
-	data := `{
-  "models": [
-	    {
-	      "key": "opus4.7",
-	      "actualModelId": "claude-opus-4-7",
-	      "provider": "claude",
-	      "dispatchRunner": "claude",
-	      "dispatchModel": "opus",
-	      "aliases": ["opus"]
-	    },
-	    {
-	      "key": "sonnet4.6",
-	      "actualModelId": "claude-sonnet-4-6",
-	      "provider": "claude",
-	      "dispatchRunner": "claude",
-	      "dispatchModel": "sonnet",
-	      "aliases": ["sonnet"]
-	    },
-	    {
-	      "key": "gemini-pro",
-	      "actualModelId": "google/gemini-3.1-pro-preview",
-	      "provider": "gemini",
-      "dispatchRunner": "antigravity",
-      "dispatchModel": "pro",
-      "aliases": ["geminipro"]
-    },
-    {
-      "key": "mimo-v2.5-pro",
-      "actualModelId": "openrouter/xiaomi/mimo-v2.5-pro",
-      "provider": "opencode",
-      "dispatchRunner": "opencode",
-      "dispatchModel": "openrouter/xiaomi/mimo-v2.5-pro",
-      "aliases": ["mimo"]
-    }
-  ]
-}`
-	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
 }

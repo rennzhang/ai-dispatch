@@ -127,3 +127,44 @@ echo "stdout response"
 		t.Fatalf("settings not restored: %s", string(restored))
 	}
 }
+
+func TestResolveAgyBinaryExplicitFailureDoesNotFallbackOrLeakPath(t *testing.T) {
+	root := t.TempDir()
+	fallback := filepath.Join(root, ".local", "bin", "agy")
+	if err := os.MkdirAll(filepath.Dir(fallback), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fallback, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(root, "private", "missing-agy")
+	t.Setenv("HOME", root)
+	t.Setenv("PATH", t.TempDir())
+	_, err := resolveAgyBinary(missing)
+	if err == nil {
+		t.Fatal("expected explicit binary failure")
+	}
+	if strings.Contains(err.Error(), missing) || !strings.Contains(err.Error(), "agy binary override") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestWithTemporaryModelReportsRestoreFailure(t *testing.T) {
+	root := t.TempDir()
+	settingsPath := filepath.Join(root, "settings.json")
+	original := `{"model":"Gemini 3.5 Flash (Medium)"}`
+	if err := os.WriteFile(settingsPath, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := withTemporaryModel(root, "Gemini 3.1 Pro (High)", func() error {
+		if err := os.Remove(settingsPath); err != nil {
+			return err
+		}
+		return os.Mkdir(settingsPath, 0o700)
+	})
+	_ = os.RemoveAll(settingsPath)
+	_ = os.WriteFile(settingsPath, []byte(original), 0o600)
+	if err == nil || !strings.Contains(err.Error(), "failed to restore agy settings.json") {
+		t.Fatalf("err=%v", err)
+	}
+}

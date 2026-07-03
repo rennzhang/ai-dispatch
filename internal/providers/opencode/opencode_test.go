@@ -18,7 +18,7 @@ func TestBuildOpenCodeArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{bin, "run", "--format", "json", "--title", "ai-dispatch", "--pure", "--dangerously-skip-permissions", "--model", "openrouter/x", "hello"}
+	want := []string{bin, "run", "--format", "json", "--title", "ai-dispatch", "--pure", "--auto", "--model", "openrouter/x", "hello"}
 	if len(spec.Args) != len(want) {
 		t.Fatalf("args=%#v", spec.Args)
 	}
@@ -40,7 +40,7 @@ func TestBuildOpenCodeArgsSupportsDefaultFormat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{bin, "run", "--format", "default", "--title", "ai-dispatch", "--pure", "--dangerously-skip-permissions", "--model", "openrouter/x", "hello"}
+	want := []string{bin, "run", "--format", "default", "--title", "ai-dispatch", "--pure", "--auto", "--model", "openrouter/x", "hello"}
 	if len(spec.Args) != len(want) {
 		t.Fatalf("args=%#v", spec.Args)
 	}
@@ -51,7 +51,7 @@ func TestBuildOpenCodeArgsSupportsDefaultFormat(t *testing.T) {
 	}
 }
 
-func TestBuildOpenCodePromptFileUsesInlinePrompt(t *testing.T) {
+func TestBuildOpenCodePromptFileUsesAttachment(t *testing.T) {
 	fakeOpenCodeBin(t)
 	target := routing.DispatchTarget{Requested: "openrouter/x", Provider: "opencode", Model: "openrouter/x"}
 	promptFile := filepath.Join(t.TempDir(), "prompt.md")
@@ -63,12 +63,13 @@ func TestBuildOpenCodePromptFileUsesInlinePrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, arg := range spec.Args {
-		if arg == "--file" || arg == promptFile {
-			t.Fatalf("prompt file path leaked into opencode args: %#v", spec.Args)
+		if arg == "prompt from file" {
+			t.Fatalf("prompt file content leaked into opencode args: %#v", spec.Args)
 		}
 	}
-	if got := spec.Args[len(spec.Args)-1]; got != "prompt from file" {
-		t.Fatalf("prompt=%q args=%#v", got, spec.Args)
+	joined := strings.Join(spec.Args, "\x00")
+	if !strings.Contains(joined, "--file\x00"+promptFile) {
+		t.Fatalf("prompt file not attached: %#v", spec.Args)
 	}
 }
 
@@ -102,6 +103,19 @@ func TestBuildOpenCodeFailsBeforeRunWhenBinaryMissing(t *testing.T) {
 	target := routing.DispatchTarget{Requested: "openrouter/x", Provider: "opencode", Model: "openrouter/x"}
 	_, err := Provider{}.Build(providers.BuildRequest{Prompt: "hello", Target: target})
 	if err == nil || !strings.Contains(err.Error(), "opencode binary not found") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestBuildOpenCodeOverrideFailureDoesNotLeakPath(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "private", "opencode")
+	t.Setenv("AI_DISPATCH_OPENCODE_BIN", missing)
+	target := routing.DispatchTarget{Requested: "openrouter/x", Provider: "opencode", Model: "openrouter/x"}
+	_, err := Provider{}.Build(providers.BuildRequest{Prompt: "hello", Target: target})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if strings.Contains(err.Error(), missing) || !strings.Contains(err.Error(), "AI_DISPATCH_OPENCODE_BIN override") {
 		t.Fatalf("err=%v", err)
 	}
 }

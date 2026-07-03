@@ -30,6 +30,18 @@ func Classify(provider string, stdout string, stderr string, runError string) Fa
 		class = contract.FailureConfig
 	case containsAny(combined, "not logged in", "please run /login", "api key", "apikey", "unauthorized", "forbidden", "permission denied", "authentication", "auth", "terms of service", "provider terms", "prohibited due to"):
 		class = contract.FailureConfig
+	case strings.EqualFold(provider, "OpenCode") && containsAny(combined,
+		"not available in your region",
+		"unsupported region",
+		"country, region, or territory",
+		"no endpoints found",
+		"model not found",
+		"model does not exist",
+		"not a valid model",
+		"do not have access to this model",
+		"not available for your account",
+	):
+		class = contract.FailureConfig
 	case containsAny(combined, "no such host", "network is unreachable", "connection refused", "connection reset", "tls handshake", "temporary failure", "timeout awaiting response"):
 		class = contract.FailureNetwork
 	case containsAny(combined, "executable file not found", "command not found", "no such file or directory"):

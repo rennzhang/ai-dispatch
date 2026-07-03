@@ -1,6 +1,8 @@
 package claude
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +34,51 @@ func TestBuildClaudeAPIArgs(t *testing.T) {
 	}
 	if len(spec.Stdin) != 0 {
 		t.Fatalf("stdin=%q", spec.Stdin)
+	}
+}
+
+func TestBuildClaudeAPIPromptFileUsesStdin(t *testing.T) {
+	target := routing.DispatchTarget{Requested: "claude", Provider: "claude", Model: "sonnet"}
+	promptFile := filepath.Join(t.TempDir(), "prompt.md")
+	if err := os.WriteFile(promptFile, []byte("prompt from file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	spec, err := Provider{}.Build(providers.BuildRequest{
+		PromptFile:      promptFile,
+		Target:          target,
+		ProviderOptions: map[string]string{"transport": "api"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(spec.Stdin) != "prompt from file" {
+		t.Fatalf("stdin=%q", spec.Stdin)
+	}
+	if strings.Contains(strings.Join(spec.Args, "\x00"), "prompt from file") {
+		t.Fatalf("prompt leaked into args: %#v", spec.Args)
+	}
+}
+
+func TestBuildClaudeDoesNotOverrideBackendModelForRegistryAlias(t *testing.T) {
+	t.Setenv("ANTHROPIC_MODEL", "openrouter/anthropic/claude-opus-4")
+	target := routing.DispatchTarget{
+		Requested: "sonnet4.6",
+		Provider:  "claude",
+		Model:     "sonnet",
+		Source:    "registry",
+		ActualID:  "claude-sonnet-4-6",
+	}
+	spec, err := Provider{}.Build(providers.BuildRequest{
+		Prompt:          "hello",
+		Target:          target,
+		ProviderOptions: map[string]string{"transport": "api"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(spec.Args, "\x00")
+	if strings.Contains(joined, "--model") {
+		t.Fatalf("registry alias should not override backend model: %#v", spec.Args)
 	}
 }
 
@@ -71,7 +118,6 @@ func TestBuildClaudePTYArgs(t *testing.T) {
 	joined := strings.Join(spec.Args, "\x00")
 	for _, want := range []string{
 		"go-pty-driver-test",
-		"--stream",
 		"--transport\x00tmux",
 		"--cwd\x00/tmp/work",
 		"--timeout\x0040",

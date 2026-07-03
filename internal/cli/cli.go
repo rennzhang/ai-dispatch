@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/rennzhang/ai-dispatch/internal/config"
 	"github.com/rennzhang/ai-dispatch/internal/contract"
@@ -16,8 +15,13 @@ import (
 	"github.com/rennzhang/ai-dispatch/internal/providers/antigravity"
 	"github.com/rennzhang/ai-dispatch/internal/providers/claude"
 	"github.com/rennzhang/ai-dispatch/internal/routing"
-	"github.com/rennzhang/ai-dispatch/internal/runstore"
+	"github.com/rennzhang/ai-dispatch/internal/setup"
 )
+
+// lastSetupResult holds the result of the most recent setup.Ensure() call
+// in this process. It is non-nil only when send/resume created config state, so
+// injectFirstRun can attach setup details to the result.
+var lastSetupResult *setup.Result
 
 func Main(argv []string, stdout io.Writer, stderr io.Writer) int {
 	return MainWithInput(argv, stdout, stderr, nil)
@@ -35,6 +39,14 @@ func MainWithInput(argv []string, stdout io.Writer, stderr io.Writer, stdin io.R
 		printHelp(stdout)
 		return 0
 	}
+	// `runs` only needs a runs/ directory, not a full provider setup.
+	// send/resume perform setup after flag parsing so help and input errors stay
+	// side-effect free.
+	switch args[0] {
+	case "runs":
+		// Ensure runs directory exists without triggering full config setup.
+		_ = os.MkdirAll(config.RunsDir(), 0o755)
+	}
 	switch args[0] {
 	case "config":
 		return configCommand(args[1:], stdout, stderr)
@@ -46,14 +58,16 @@ func MainWithInput(argv []string, stdout io.Writer, stderr io.Writer, stdin io.R
 		return initConfig(args[1:], stdout, stderr)
 	case "models":
 		return models(args[1:], stdout, stderr)
+	case "preferences":
+		return preferences(args[1:], stdout, stderr)
+	case "providers":
+		return providersCommand(args[1:], stdout, stderr)
 	case "runs":
 		return runs(args[1:], stdout, stderr)
 	case "send":
 		return send(args[1:], stdout, stderr, stdin)
 	case "resume":
 		return resume(args[1:], stdout, stderr, stdin)
-	case "skill":
-		return skill(args[1:], stdout, stderr)
 	default:
 		return emitCLIError(stdout, stderr, false, fmt.Sprintf("unknown command: %s", args[0]), 2)
 	}
@@ -68,10 +82,11 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "  ai-dispatch config path|show")
 	fmt.Fprintln(w, "  ai-dispatch guide models")
 	fmt.Fprintln(w, "  ai-dispatch runs list|show|tail|failures")
-	fmt.Fprintln(w, "  ai-dispatch init [--claude-transport print|pty|auto|disabled]")
-	fmt.Fprintln(w, "  ai-dispatch skill install --target codex|claude|all")
+	fmt.Fprintln(w, "  ai-dispatch init [--claude-transport print|pty|auto|disabled] [--force]")
+	fmt.Fprintln(w, "  ai-dispatch providers scan [--refresh] [--format json]")
 	fmt.Fprintln(w, "  ai-dispatch doctor --format json")
 	fmt.Fprintln(w, "  ai-dispatch models --format json")
+	fmt.Fprintln(w, "  ai-dispatch preferences path|show|open")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Common flags:")
 	fmt.Fprintln(w, "  --json-result                  write ProviderResult JSON to stdout")
@@ -95,9 +110,13 @@ func initConfig(argv []string, stdout io.Writer, stderr io.Writer) int {
 	if !config.ValidClaudeTransport(*claudeTransport) {
 		return emitCLIError(stdout, stderr, *format == "json", "--claude-transport must be print, pty, auto, or disabled", 2)
 	}
-	cfg, err := config.Init(config.InitOptions{
+	if err := validateFormat(*format); err != nil {
+		return emitCLIError(stdout, stderr, *format == "json", err.Error(), 2)
+	}
+	result, err := setup.Run(setup.Options{
 		ClaudeTransport: *claudeTransport,
 		Force:           *force,
+		ScanProviders:   true,
 	})
 	if err != nil {
 		return emitCLIError(stdout, stderr, *format == "json", err.Error(), 1)
@@ -107,15 +126,25 @@ func initConfig(argv []string, stdout io.Writer, stderr io.Writer) int {
 		"home":             config.HomeDir(),
 		"config":           config.ConfigPath(),
 		"runs":             config.RunsDir(),
-		"cache":            config.CacheDir(),
 		"logs":             config.LogsDir(),
-		"claude_transport": cfg.ClaudeTransport,
+		"claude_transport": result.Config.ClaudeTransport,
+		"first_run":        result.FirstRun,
+	}
+	if len(result.Config.Providers) > 0 {
+		payload["providers"] = result.Config.Providers
 	}
 	if *format == "json" {
 		return writeJSON(stdout, payload, 0)
 	}
 	fmt.Fprintf(stdout, "ai-dispatch initialized at %s\n", config.HomeDir())
 	fmt.Fprintf(stdout, "config: %s\n", config.ConfigPath())
+	for name, ps := range result.Config.Providers {
+		status := "unavailable"
+		if ps.Available {
+			status = "available"
+		}
+		fmt.Fprintf(stdout, "provider %s: %s\n", name, status)
+	}
 	return 0
 }
 
@@ -147,277 +176,6 @@ func configCommand(argv []string, stdout io.Writer, stderr io.Writer) int {
 	}
 }
 
-func doctor(argv []string, stdout io.Writer, stderr io.Writer) int {
-	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	format := fs.String("format", "text", "text or json")
-	if err := fs.Parse(argv); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
-		}
-		return 2
-	}
-	cfg, cfgErr := config.Load()
-	payload := map[string]any{
-		"ok":                 true,
-		"runtime":            "go",
-		"provider_execution": providerExecutionStatus(),
-		"contract":           "2.0",
-		"home":               config.HomeDir(),
-		"config_path":        config.ConfigPath(),
-		"runs_dir":           config.RunsDir(),
-		"cache_dir":          config.CacheDir(),
-		"claude_env":         claudeEnvStatus(),
-	}
-	if cfgErr != nil {
-		payload["ok"] = false
-		payload["config_error"] = cfgErr.Error()
-	} else {
-		payload["config"] = cfg
-	}
-	if *format == "json" {
-		return writeJSON(stdout, payload, 0)
-	}
-	fmt.Fprintln(stdout, "ai-dispatch go: ok")
-	return 0
-}
-
-func providerExecutionStatus() string {
-	if os.Getenv("AI_DISPATCH_GO_PROVIDER_EXECUTION") == "on" {
-		return "enabled"
-	}
-	return "disabled_by_default"
-}
-
-func claudeEnvStatus() map[string]any {
-	status := map[string]any{
-		"api_env_present": false,
-	}
-	model := os.Getenv("ANTHROPIC_MODEL")
-	baseURL := os.Getenv("ANTHROPIC_BASE_URL")
-	if model != "" {
-		status["model"] = model
-	}
-	if baseURL != "" {
-		status["base_url"] = baseURL
-	}
-	for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"} {
-		if strings.TrimSpace(os.Getenv(key)) != "" {
-			status["api_env_present"] = true
-			break
-		}
-	}
-	return status
-}
-
-func sanitizedClaudeProviderConfig(raw string) (model string, baseURL string, hasAPIBackend bool) {
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-		return "", "", false
-	}
-	env, ok := payload["env"].(map[string]any)
-	if !ok {
-		return "", "", false
-	}
-	if value, ok := env["ANTHROPIC_MODEL"].(string); ok {
-		model = value
-	}
-	if value, ok := env["ANTHROPIC_BASE_URL"].(string); ok {
-		baseURL = value
-	}
-	for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"} {
-		if value, ok := env[key].(string); ok && strings.TrimSpace(value) != "" {
-			hasAPIBackend = true
-			break
-		}
-	}
-	return model, baseURL, hasAPIBackend
-}
-
-func models(argv []string, stdout io.Writer, stderr io.Writer) int {
-	if len(argv) > 0 && argv[0] == "resolve" {
-		return modelsResolve(argv[1:], stdout, stderr)
-	}
-	fs := flag.NewFlagSet("models", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	format := fs.String("format", "text", "text or json")
-	if err := fs.Parse(argv); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
-		}
-		return 2
-	}
-	payload := map[string]any{
-		"ok":      true,
-		"targets": routing.SupportedTargets(),
-	}
-	if *format == "json" {
-		return writeJSON(stdout, payload, 0)
-	}
-	fmt.Fprintln(stdout, strings.Join(payload["targets"].([]string), "\n"))
-	return 0
-}
-
-func modelsResolve(argv []string, stdout io.Writer, stderr io.Writer) int {
-	argv = reorderInterspersedFlags(argv)
-	fs := flag.NewFlagSet("models resolve", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	format := fs.String("format", "json", "json")
-	model := fs.String("model", "", "explicit model")
-	if err := fs.Parse(argv); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
-		}
-		return 2
-	}
-	args := fs.Args()
-	if len(args) != 1 {
-		fmt.Fprintln(stderr, "ai-dispatch models resolve: expected exactly one target")
-		return 2
-	}
-	target, err := routing.Resolve(args[0], *model)
-	if err != nil {
-		return emitCLIError(stdout, stderr, *format == "json", err.Error(), 2)
-	}
-	return writeJSON(stdout, target, 0)
-}
-
-func runs(argv []string, stdout io.Writer, stderr io.Writer) int {
-	if len(argv) == 0 {
-		fmt.Fprintln(stderr, "ai-dispatch runs: expected list, show, tail, or failures")
-		return 2
-	}
-	switch argv[0] {
-	case "list":
-		filter, err := parseRunsListFlags(argv[1:], stderr)
-		if err != nil {
-			if errors.Is(err, flag.ErrHelp) {
-				return 0
-			}
-			fmt.Fprintln(stderr, "ai-dispatch runs list:", err)
-			return 2
-		}
-		records, err := runstore.ListFiltered("", filter)
-		if err != nil {
-			fmt.Fprintln(stderr, "ai-dispatch runs list:", err)
-			return 1
-		}
-		return writeJSON(stdout, summarizeRunRecords(records), 0)
-	case "failures":
-		payload, err := runsFailures(argv[1:], stderr)
-		if err != nil {
-			if errors.Is(err, flag.ErrHelp) {
-				return 0
-			}
-			fmt.Fprintln(stderr, "ai-dispatch runs failures:", err)
-			return 2
-		}
-		return writeJSON(stdout, payload, 0)
-	case "show", "tail":
-		if len(argv) < 2 {
-			fmt.Fprintf(stderr, "ai-dispatch runs %s: missing run id\n", argv[0])
-			return 2
-		}
-		record, err := runstore.Read("", argv[1])
-		if err != nil {
-			fmt.Fprintf(stderr, "ai-dispatch runs %s: %v\n", argv[0], err)
-			return 1
-		}
-		return writeJSON(stdout, record, 0)
-	default:
-		fmt.Fprintf(stderr, "ai-dispatch runs: unknown subcommand %q\n", argv[0])
-		return 2
-	}
-}
-
-func parseRunsListFlags(argv []string, stderr io.Writer) (runstore.ListFilter, error) {
-	fs := flag.NewFlagSet("runs list", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	status := fs.String("status", "", "filter by status")
-	target := fs.String("target", "", "filter by target")
-	taskName := fs.String("task-name", "", "filter by task name glob")
-	failureClass := fs.String("failure-class", "", "filter by failure class")
-	since := fs.String("since", "", "filter by RFC3339 timestamp or relative duration like 24h/7d")
-	limit := fs.Int("limit", 0, "maximum number of records")
-	if err := fs.Parse(argv); err != nil {
-		return runstore.ListFilter{}, err
-	}
-	filter := runstore.ListFilter{
-		Status:       contract.Status(*status),
-		Target:       *target,
-		TaskNameGlob: *taskName,
-		FailureClass: contract.FailureClass(*failureClass),
-		Limit:        *limit,
-	}
-	if *since != "" {
-		t, err := parseSince(*since, time.Now())
-		if err != nil {
-			return runstore.ListFilter{}, fmt.Errorf("--since must be RFC3339 or relative duration like 24h/7d: %w", err)
-		}
-		filter.Since = t
-	}
-	return filter, nil
-}
-
-type runListSummary struct {
-	RunID           string                `json:"run_id"`
-	CreatedAt       string                `json:"created_at"`
-	TaskName        string                `json:"task_name,omitempty"`
-	Target          string                `json:"target,omitempty"`
-	Status          contract.Status       `json:"status,omitempty"`
-	ProviderUsed    string                `json:"provider_used,omitempty"`
-	ModelUsed       string                `json:"model_used,omitempty"`
-	RequestedTarget string                `json:"requested_target,omitempty"`
-	Degraded        bool                  `json:"degraded,omitempty"`
-	DegradeReason   string                `json:"degrade_reason,omitempty"`
-	FailureClass    contract.FailureClass `json:"failure_class,omitempty"`
-	NextAction      contract.NextAction   `json:"next_action,omitempty"`
-	ExitCode        int                   `json:"exit_code,omitempty"`
-	DurationMS      int64                 `json:"duration_ms,omitempty"`
-	WarningsCount   int                   `json:"warnings_count,omitempty"`
-	StderrBytes     int                   `json:"stderr_bytes,omitempty"`
-	OutputFile      string                `json:"output_file,omitempty"`
-	Path            string                `json:"path"`
-}
-
-func summarizeRunRecords(records []runstore.RunRecord) []runListSummary {
-	summaries := make([]runListSummary, 0, len(records))
-	for _, record := range records {
-		summaries = append(summaries, summarizeRunRecord(record))
-	}
-	return summaries
-}
-
-func summarizeRunRecord(record runstore.RunRecord) runListSummary {
-	summary := runListSummary{
-		RunID:     record.RunID,
-		CreatedAt: record.CreatedAt,
-		TaskName:  record.TaskName,
-		Target:    record.Target,
-		Status:    record.Status,
-		Path:      record.Path,
-	}
-	if record.Result == nil {
-		return summary
-	}
-	result := record.Result
-	summary.ProviderUsed = result.ProviderUsed
-	summary.ModelUsed = result.ModelUsed
-	summary.RequestedTarget = result.RequestedTarget
-	summary.Degraded = result.Degraded
-	summary.DegradeReason = result.DegradeReason
-	if result.FailureClass != nil {
-		summary.FailureClass = *result.FailureClass
-	}
-	summary.NextAction = result.NextAction
-	summary.ExitCode = result.ExitCode
-	summary.DurationMS = result.DurationMS
-	summary.WarningsCount = len(result.Warnings)
-	summary.StderrBytes = len(result.Stderr)
-	summary.OutputFile = result.OutputFile
-	return summary
-}
-
 func send(argv []string, stdout io.Writer, stderr io.Writer, stdin io.Reader) int {
 	req, jsonResult, err := parseSend("send", argv, stderr)
 	if err != nil {
@@ -432,10 +190,14 @@ func send(argv []string, stdout io.Writer, stderr io.Writer, stdin io.Reader) in
 	if err := prepareRequest(&req, stdin); err != nil {
 		return emitCLIError(stdout, stderr, jsonResult, err.Error(), 2)
 	}
-	if strings.TrimSpace(req.Prompt) == "" {
+	if strings.TrimSpace(req.Prompt) == "" && req.PromptFile == "" {
 		return emitCLIError(stdout, stderr, jsonResult, "Either prompt, --prompt-file, or stdin input is required", 2)
 	}
+	if code, ok := ensureExecutionSetup(jsonResult, stdout, stderr); !ok {
+		return code
+	}
 	result := dispatch.ExecuteWithOptions(req, dispatch.Options{ProgressWriter: progressWriter(req, stderr)})
+	result = injectFirstRun(result, jsonResult, stderr)
 	if jsonResult {
 		return writeProviderResult(stdout, result)
 	}
@@ -463,15 +225,104 @@ func resume(argv []string, stdout io.Writer, stderr io.Writer, stdin io.Reader) 
 	if err := prepareRequest(&req, stdin); err != nil {
 		return emitCLIError(stdout, stderr, jsonResult, err.Error(), 2)
 	}
-	if strings.TrimSpace(req.Prompt) == "" {
+	if strings.TrimSpace(req.Prompt) == "" && req.PromptFile == "" {
 		return emitCLIError(stdout, stderr, jsonResult, "Either prompt, --prompt-file, or stdin input is required", 2)
 	}
+	if code, ok := ensureExecutionSetup(jsonResult, stdout, stderr); !ok {
+		return code
+	}
 	result := dispatch.ExecuteWithOptions(req, dispatch.Options{ProgressWriter: progressWriter(req, stderr)})
+	result = injectFirstRun(result, jsonResult, stderr)
 	if jsonResult {
 		return writeProviderResult(stdout, result)
 	}
+	if result.OK {
+		if result.Text != "" && result.OutputFile == "" {
+			fmt.Fprintln(stdout, result.Text)
+		}
+		return 0
+	}
 	fmt.Fprintln(stderr, result.Stderr)
-	return 3
+	return result.ExitCode
+}
+
+func ensureExecutionSetup(jsonResult bool, stdout io.Writer, stderr io.Writer) (int, bool) {
+	lastSetupResult = nil
+	if config.StateMissing() {
+		fmt.Fprintln(stderr, "ai-dispatch: 首次调用，正在初始化配置...")
+	}
+	br, err := setup.Ensure()
+	if err != nil {
+		return emitCLIError(stdout, stderr, jsonResult, fmt.Sprintf("config setup failed: %v", err), 1), false
+	}
+	if br.Summary != nil {
+		printSetupSummary(stderr, br.Summary)
+		lastSetupResult = &br
+		fmt.Fprintln(stderr, "ai-dispatch: 继续执行任务...")
+	}
+	return 0, true
+}
+
+// printSetupSummary writes a human-readable initialization summary to
+// stderr so the calling Agent (and user) can see what was created.
+func printSetupSummary(stderr io.Writer, s *setup.Summary) {
+	fmt.Fprintln(stderr, "ai-dispatch: 配置初始化完成")
+	fmt.Fprintf(stderr, "  运行时目录: %s\n", s.HomeDir)
+	fmt.Fprintf(stderr, "  配置文件: %s\n", s.ConfigPath)
+	fmt.Fprintf(stderr, "  用户偏好: %s\n", s.PreferencesPath)
+	fmt.Fprintf(stderr, "  Claude transport: %s\n", s.ClaudeTransport)
+	if len(s.Providers) == 0 {
+		return
+	}
+	fmt.Fprintln(stderr, "  Provider 探测:")
+	for _, name := range []string{"claude", "codex", "opencode", "antigravity"} {
+		ps, ok := s.Providers[name]
+		if !ok {
+			continue
+		}
+		if ps.Available {
+			version := ps.Version
+			if version == "" {
+				version = "unknown"
+			}
+			fmt.Fprintf(stderr, "    %s: available (%s)\n", name, version)
+		} else {
+			fmt.Fprintf(stderr, "    %s: unavailable\n", name)
+		}
+	}
+}
+
+// injectFirstRun stamps the first ProviderResult only when this process
+// actually created config state before executing send/resume.
+func injectFirstRun(result contract.ProviderResult, jsonResult bool, stderr io.Writer) contract.ProviderResult {
+	if lastSetupResult == nil || lastSetupResult.Summary == nil {
+		return result
+	}
+	result.FirstRun = true
+	result.FirstRunHint = setup.FirstRunHint
+	s := lastSetupResult.Summary
+	providers := make(map[string]contract.ProviderSetupSummary, len(s.Providers))
+	for name, ps := range s.Providers {
+		providers[name] = contract.ProviderSetupSummary{
+			Available:         ps.Available,
+			Version:           ps.Version,
+			CatalogModelCount: ps.CatalogModelCount,
+			Error:             ps.Error,
+		}
+	}
+	result.FirstRunSetup = &contract.FirstRunSetupInfo{
+		InitializedAt:   s.InitializedAt,
+		HomeDir:         s.HomeDir,
+		ConfigPath:      s.ConfigPath,
+		PreferencesPath: s.PreferencesPath,
+		ClaudeTransport: s.ClaudeTransport,
+		Providers:       providers,
+	}
+	if !jsonResult {
+		fmt.Fprintln(stderr, setup.FirstRunHint)
+	}
+	lastSetupResult = nil
+	return result
 }
 
 func prepareRequest(req *contract.DispatchRequest, stdin io.Reader) error {
@@ -492,8 +343,7 @@ func prepareRequest(req *contract.DispatchRequest, stdin io.Reader) error {
 		if len(data) > 2_000_000 {
 			return fmt.Errorf("--prompt-file is too large; keep it under 2MB")
 		}
-		req.Prompt = string(data)
-		return validatePromptFile(req.Prompt)
+		return validatePromptFile(string(data))
 	}
 	if strings.TrimSpace(req.Prompt) != "" {
 		return validatePrompt(req.Prompt)
@@ -559,14 +409,10 @@ func parseSend(command string, argv []string, stderr io.Writer) (contract.Dispat
 	sessionProvider := fs.String("session-provider", "", "session provider")
 	jsonResult := fs.Bool("json-result", false, "write ProviderResult JSON to stdout")
 	streamProgress := fs.Bool("stream-progress", false, "write progress NDJSON to stderr")
-	timeout := fs.Int("timeout", 0, "wall-clock timeout seconds; 0 disables")
-	timeoutShort := fs.Int("t", 0, "wall-clock timeout seconds; 0 disables")
+	timeout := fs.Int("timeout", -1, "wall-clock timeout seconds; 0 disables")
+	timeoutShort := fs.Int("t", -1, "wall-clock timeout seconds; 0 disables")
 	activityTimeout := fs.Int("activity-timeout", -1, "seconds without provider activity before failure; 0 disables")
-	callerEnv := fs.String("caller-env", os.Getenv("AI_DISPATCH_CALLER_ENV"), "caller env")
-	callerProvider := fs.String("caller-provider", os.Getenv("AI_DISPATCH_CALLER_PROVIDER"), "caller provider")
-	callerModule := fs.String("caller-module", os.Getenv("AI_DISPATCH_CALLER_MODULE"), "caller module")
 	taskName := fs.String("task-name", "", "task name")
-	noMetaHeader := fs.Bool("no-meta-header", false, "disable meta header")
 	providerOpts := multiFlag{}
 	fs.Var(&providerOpts, "provider-opt", "provider option, e.g. claude.transport=print|pty|auto")
 	if err := fs.Parse(argv); err != nil {
@@ -583,14 +429,14 @@ func parseSend(command string, argv []string, stderr io.Writer) (contract.Dispat
 		SessionProvider: *sessionProvider,
 		JSONResult:      *jsonResult,
 		StreamProgress:  *streamProgress,
-		TimeoutSeconds:  firstNonZero(*timeout, *timeoutShort),
+		TimeoutSeconds:  defaultFixedTimeoutSeconds(firstNonNegative(*timeout, *timeoutShort)),
 		TaskName:        *taskName,
-		CallerEnv:       *callerEnv,
-		CallerProvider:  *callerProvider,
-		CallerModule:    *callerModule,
-		NoMetaHeader:    *noMetaHeader,
-		ProviderOpts:    parseProviderOpts(providerOpts),
 	}
+	parsedProviderOpts, err := parseProviderOpts(providerOpts)
+	if err != nil {
+		return contract.DispatchRequest{}, *jsonResult, err
+	}
+	req.ProviderOpts = parsedProviderOpts
 	req.Target = *targetFlag
 	if command == "resume" {
 		if len(args) > 0 {
@@ -624,6 +470,8 @@ func rejectRetiredArgs(argv []string) error {
 			return fmt.Errorf("%s was removed; fallback is owned by route policy", name)
 		case "--model-family":
 			return fmt.Errorf("%s was removed; use an explicit target or --model", name)
+		case "--caller-env", "--caller-provider", "--caller-module", "--no-meta-header":
+			return fmt.Errorf("%s was removed; caller metadata is no longer part of the dispatch request", name)
 		}
 	}
 	return nil
@@ -647,6 +495,13 @@ func defaultActivityTimeoutSeconds(flagValue int, target string, model string) i
 		return 300
 	}
 	return 180
+}
+
+func defaultFixedTimeoutSeconds(flagValue int) int {
+	if flagValue >= 0 {
+		return flagValue
+	}
+	return 1800
 }
 
 func reorderInterspersedFlags(argv []string) []string {
@@ -673,7 +528,7 @@ func reorderInterspersedFlags(argv []string) []string {
 
 func isBoolFlag(arg string) bool {
 	switch arg {
-	case "--json-result", "--stream-progress", "--no-meta-header":
+	case "--json-result", "--stream-progress":
 		return true
 	default:
 		return false
@@ -688,8 +543,7 @@ func isValueFlag(arg string) bool {
 	switch name {
 	case "--prompt-file", "--output-file", "-o", "--model", "-m", "--cwd",
 		"--target", "--session-id", "--session-provider", "--timeout", "-t",
-		"--activity-timeout", "--caller-env", "--caller-provider",
-		"--caller-module", "--task-name", "--provider-opt", "--format":
+		"--activity-timeout", "--task-name", "--provider-opt", "--format":
 		return true
 	default:
 		return false
@@ -704,26 +558,42 @@ func (m *multiFlag) Set(value string) error {
 	return nil
 }
 
-func parseProviderOpts(values []string) map[string]map[string]string {
+func parseProviderOpts(values []string) (map[string]map[string]string, error) {
 	if len(values) == 0 {
-		return nil
+		return nil, nil
 	}
 	out := map[string]map[string]string{}
 	for _, value := range values {
 		left, right, ok := strings.Cut(value, "=")
 		if !ok {
-			continue
+			return nil, fmt.Errorf("--provider-opt must use provider.key=value")
 		}
 		provider, key, ok := strings.Cut(left, ".")
 		if !ok || provider == "" || key == "" {
-			continue
+			return nil, fmt.Errorf("--provider-opt must use provider.key=value")
+		}
+		if !validProviderOpt(provider, key) {
+			return nil, fmt.Errorf("unsupported provider option %s.%s", provider, key)
 		}
 		if out[provider] == nil {
 			out[provider] = map[string]string{}
 		}
 		out[provider][key] = right
 	}
-	return out
+	return out, nil
+}
+
+func validProviderOpt(provider string, key string) bool {
+	switch provider {
+	case "claude":
+		return key == "transport"
+	case "opencode":
+		return key == "format"
+	case "antigravity":
+		return key == "bin" || key == "root"
+	default:
+		return false
+	}
 }
 
 func emitCLIError(stdout io.Writer, stderr io.Writer, jsonResult bool, message string, exitCode int) int {
@@ -768,11 +638,11 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func firstNonZero(values ...int) int {
+func firstNonNegative(values ...int) int {
 	for _, value := range values {
-		if value != 0 {
+		if value >= 0 {
 			return value
 		}
 	}
-	return 0
+	return -1
 }

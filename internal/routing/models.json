@@ -73,13 +73,13 @@
       "aliases": ["geminipro"]
     },
     {
-      "key": "mimo-v2.5-pro",
-      "label": "mimo-v2.5-pro",
+      "key": "mimo-openrouter-pro",
+      "label": "mimo-openrouter-pro",
       "actualModelId": "openrouter/xiaomi/mimo-v2.5-pro",
       "provider": "opencode",
       "providerTitle": "Xiaomi",
-      "shortLabel": "mimo-v2.5-pro",
-      "fullLabel": "Xiaomi MiMo v2.5 Pro",
+      "shortLabel": "mimo-openrouter-pro",
+      "fullLabel": "Xiaomi MiMo v2.5 Pro via OpenRouter",
       "dispatchRunner": "opencode",
       "dispatchModel": "openrouter/xiaomi/mimo-v2.5-pro",
       "stableTier": "stable",
@@ -90,15 +90,29 @@
         "Use as the stable default candidate for UI and visual design tasks."
       ],
       "aliases": [
-        "mimo",
-        "mimopro",
-        "xiaomi",
-        "xiaomimimo",
-        "mimo-pro",
-        "mimo-v2-pro",
         "mimo-v2.5-pro",
         "xiaomi/mimo-v2.5-pro",
         "openrouter/xiaomi/mimo-v2.5-pro"
+      ]
+    },
+    {
+      "key": "mimo-opencode-free",
+      "label": "mimo-opencode-free",
+      "actualModelId": "opencode/mimo-v2.5-free",
+      "provider": "opencode",
+      "providerTitle": "OpenCode",
+      "shortLabel": "mimo-opencode-free",
+      "fullLabel": "MiMo v2.5 Free via OpenCode",
+      "dispatchRunner": "opencode",
+      "dispatchModel": "opencode/mimo-v2.5-free",
+      "stableTier": "fallback",
+      "capabilities": ["frontend-ui", "visual-design", "layout", "light-agent", "low-cost"],
+      "recommendedFor": ["frontend-ui-fallback", "opencode-free"],
+      "notes": [
+        "Use as an OpenCode-hosted MiMo fallback when the OpenRouter route is unavailable."
+      ],
+      "aliases": [
+        "opencode/mimo-v2.5-free"
       ]
     },
     {
@@ -258,11 +272,5 @@
         "openrouter/deepseek/deepseek-v4-pro"
       ]
     }
-  ],
-  "defaultModelByProvider": {
-    "claude": "sonnet4.6",
-    "codex": "gpt5.5",
-    "gemini": "gemini-flash",
-    "opencode": "mimo-v2.5-pro"
-  }
+  ]
 }

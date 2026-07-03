@@ -11,9 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
-	"syscall"
 )
 
 const defaultFlashLabel = "Gemini 3.5 Flash (Medium)"
@@ -175,24 +173,35 @@ func runAgyDriver(cfg agyDriverConfig, stdout io.Writer, stderr io.Writer) error
 }
 
 func resolveAgyBinary(explicit string) (string, error) {
-	candidates := []string{
-		explicit,
-		os.Getenv("AI_DISPATCH_AGY_BIN"),
-		"agy",
-		filepath.Join(os.Getenv("HOME"), ".local", "bin", "agy"),
+	if strings.TrimSpace(explicit) != "" {
+		return executableAgyBinary(explicit, "agy binary override")
 	}
-	for _, candidate := range candidates {
-		if strings.TrimSpace(candidate) == "" {
-			continue
-		}
-		if path, err := exec.LookPath(candidate); err == nil {
+	if env := strings.TrimSpace(os.Getenv("AI_DISPATCH_AGY_BIN")); env != "" {
+		return executableAgyBinary(env, "AI_DISPATCH_AGY_BIN override")
+	}
+	if path, err := exec.LookPath("agy"); err == nil {
+		return path, nil
+	}
+	if home := os.Getenv("HOME"); home != "" {
+		if path, err := executableAgyBinary(filepath.Join(home, ".local", "bin", "agy"), "agy fallback"); err == nil {
 			return path, nil
-		}
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate, nil
 		}
 	}
 	return "", fmt.Errorf("agy binary not found; install agy or set AI_DISPATCH_AGY_BIN")
+}
+
+func executableAgyBinary(candidate string, label string) (string, error) {
+	if path, err := exec.LookPath(candidate); err == nil {
+		return path, nil
+	}
+	if !strings.Contains(candidate, string(os.PathSeparator)) {
+		return "", fmt.Errorf("%s is not executable or not found", label)
+	}
+	info, err := os.Stat(candidate)
+	if err != nil || info.IsDir() || info.Mode().Perm()&0o111 == 0 {
+		return "", fmt.Errorf("%s is not executable or not found", label)
+	}
+	return candidate, nil
 }
 
 func agyRoot(explicit string) (string, error) {
@@ -255,9 +264,25 @@ func withTemporaryModel(root string, modelLabel string, fn func() error) error {
 		if err := os.WriteFile(settingsPath, data, 0o600); err != nil {
 			return err
 		}
-		defer os.WriteFile(settingsPath, original, 0o600)
+		runErr := fn()
+		if restoreErr := os.WriteFile(settingsPath, original, 0o600); restoreErr != nil {
+			restoreMsg := fmt.Errorf("failed to restore agy settings.json after temporary model switch: %s", compactFileError(restoreErr))
+			if runErr != nil {
+				return errors.Join(runErr, restoreMsg)
+			}
+			return restoreMsg
+		}
+		return runErr
 	}
 	return fn()
+}
+
+func compactFileError(err error) string {
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Err.Error()
+	}
+	return err.Error()
 }
 
 func extractFinalTranscriptText(path string, startOffset int64) string {
@@ -369,18 +394,4 @@ func expandHome(path string) string {
 		return filepath.Join(os.Getenv("HOME"), strings.TrimPrefix(path, "~/"))
 	}
 	return path
-}
-
-func flock(file *os.File) error {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
-	return syscall.Flock(int(file.Fd()), syscall.LOCK_EX)
-}
-
-func funlock(file *os.File) {
-	if runtime.GOOS == "windows" {
-		return
-	}
-	_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 }

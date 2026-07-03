@@ -5,6 +5,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 export AI_DISPATCH_GO_PROVIDER_EXECUTION=on
+codex_target="${AI_DISPATCH_SMOKE_CODEX_TARGET:-gpt5.5}"
+opencode_target="${AI_DISPATCH_SMOKE_OPENCODE_TARGET:-mimo-openrouter-pro}"
 
 run_smoke() {
   local name="$1"
@@ -13,22 +15,22 @@ run_smoke() {
   "$@"
 }
 
-run_smoke "codex gpt5.5" \
-  go run ./cmd/ai-dispatch send gpt5.5 "Reply exactly: OK" --json-result --timeout 120 --activity-timeout 60
+run_smoke "codex ${codex_target}" \
+  go run ./cmd/ai-dispatch send "$codex_target" "Reply exactly: OK" --json-result --timeout 120 --activity-timeout 60
 
-run_smoke "opencode mimo" \
-  go run ./cmd/ai-dispatch send mimo "Reply exactly: OK" --json-result --timeout 120 --activity-timeout 60
+run_smoke "opencode ${opencode_target}" \
+  go run ./cmd/ai-dispatch send "$opencode_target" "Reply exactly: OK" --json-result --timeout 120 --activity-timeout 60
 
 echo "[provider-smoke] gemini aliases route through the Go Antigravity provider; use go_agy_stress.sh for explicit Antigravity/Gemini stress."
 
 run_smoke "opencode output file"
 tmp="$(mktemp -t ai-dispatch-output.XXXXXX.md)"
-go run ./cmd/ai-dispatch send mimo "Reply exactly: OK" --json-result --output-file "$tmp" --timeout 120 --activity-timeout 60
+go run ./cmd/ai-dispatch send "$opencode_target" "Reply exactly: OK" --json-result --output-file "$tmp" --timeout 120 --activity-timeout 60
 test -s "$tmp"
 rm -f "$tmp"
 
 run_smoke "opencode stream progress" \
-  go run ./cmd/ai-dispatch send mimo "Reply exactly: OK" --json-result --stream-progress --timeout 120 --activity-timeout 60
+  go run ./cmd/ai-dispatch send "$opencode_target" "Reply exactly: OK" --json-result --stream-progress --timeout 120 --activity-timeout 60
 
 if [[ "${AI_DISPATCH_SMOKE_CLAUDE:-off}" == "on" ]]; then
   claude_target="${AI_DISPATCH_SMOKE_CLAUDE_TARGET:-claude}"

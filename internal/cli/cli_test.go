@@ -13,6 +13,14 @@ import (
 	"github.com/rennzhang/ai-dispatch/internal/runstore"
 )
 
+// TestMain ensures tests never trigger real provider CLI calls, regardless of
+// the developer's shell environment. main.go sets the default to "on" for
+// production, but tests must not hit the network.
+func TestMain(m *testing.M) {
+	os.Setenv("AI_DISPATCH_GO_PROVIDER_EXECUTION", "off")
+	os.Exit(m.Run())
+}
+
 func TestDoctorJSON(t *testing.T) {
 	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
 	var stdout, stderr bytes.Buffer
@@ -32,6 +40,11 @@ func TestDoctorJSON(t *testing.T) {
 	}
 	if _, ok := payload["config"].(map[string]any); !ok {
 		t.Fatalf("missing config payload=%v", payload)
+	}
+	for _, forbidden := range []string{"home", "config_path", "runs_dir"} {
+		if _, ok := payload[forbidden]; ok {
+			t.Fatalf("doctor should not expose %s: %v", forbidden, payload)
+		}
 	}
 }
 
@@ -63,6 +76,7 @@ func TestHelpFlagsExitCleanly(t *testing.T) {
 		{"doctor", "--help"},
 		{"models", "--help"},
 		{"models", "resolve", "--help"},
+		{"preferences", "--help"},
 		{"runs", "list", "--help"},
 		{"runs", "failures", "--help"},
 	}
@@ -75,6 +89,113 @@ func TestHelpFlagsExitCleanly(t *testing.T) {
 		if strings.Contains(stderr.String(), "flag: help requested") {
 			t.Fatalf("args=%v stderr=%s", args, stderr.String())
 		}
+	}
+}
+
+func TestSendHelpDoesNotInitializeConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AI_DISPATCH_HOME", home)
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"send", "--help"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, "config.json")); !os.IsNotExist(err) {
+		t.Fatalf("send --help should not create config, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "preferences.md")); !os.IsNotExist(err) {
+		t.Fatalf("send --help should not create preferences, err=%v", err)
+	}
+}
+
+func TestDoctorBadConfigReturnsNonZero(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AI_DISPATCH_HOME", home)
+	writeCLIConfig(t, filepath.Join(home, "config.json"), `{"claude_transport":"bad"}`)
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"doctor", "--format", "json"}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("expected non-zero code stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["ok"] != false || payload["config_error"] == nil {
+		t.Fatalf("payload=%v", payload)
+	}
+	if strings.Contains(stdout.String(), home) {
+		t.Fatalf("doctor should not expose config path: %s", stdout.String())
+	}
+}
+
+func TestDoctorJSONIsCompact(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AI_DISPATCH_HOME", home)
+	t.Setenv("ANTHROPIC_MODEL", "private-model-name")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://private.example.test")
+	writeCLIConfig(t, filepath.Join(home, "config.json"), `{
+  "version": 1,
+  "claude_transport": "print",
+  "models": {
+    "private-alias": [
+      { "provider": "opencode", "model": "private/provider-model" }
+    ]
+  },
+  "providers": {
+    "opencode": { "available": true, "version": "1.17.3", "catalog_model_count": 42 }
+  }
+}`)
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"doctor", "--format", "json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	text := stdout.String()
+	for _, forbidden := range []string{home, "private-model-name", "private.example.test", "private/provider-model", "private-alias", "1.17.3"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("doctor leaked %q: %s", forbidden, text)
+		}
+	}
+	if !strings.Contains(text, `"model_alias_count":1`) || !strings.Contains(text, `"catalog_model_count":42`) {
+		t.Fatalf("doctor should keep compact counts: %s", text)
+	}
+}
+
+func TestLegacyConfigRegistryPathFailsClosed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AI_DISPATCH_HOME", home)
+	writeCLIConfig(t, filepath.Join(home, "config.json"), `{
+  "version": 1,
+  "claude_transport": "print",
+  "models": {
+    "registry_path": "/private/old/registry.json",
+    "mimo-pro": [
+      { "provider": "opencode", "model": "openrouter/xiaomi/mimo-v2.5-pro" }
+    ]
+  },
+  "providers": {}
+}`)
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"models", "resolve", "mimo-pro"}, &stdout, &stderr)
+	if code == 0 || !strings.Contains(stdout.String()+stderr.String(), "models.registry_path") {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestRetiredCallerFlagsFailClosed(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"send", "codex", "hello", "--caller-env", "local", "--json-result"}, &stdout, &stderr)
+	if code != 2 || !strings.Contains(stdout.String()+stderr.String(), "--caller-env was removed") {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestInvalidFormatFails(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"doctor", "--format", "jsn"}, &stdout, &stderr)
+	if code != 2 || !strings.Contains(stderr.String(), "--format must be text or json") {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 }
 
@@ -95,6 +216,30 @@ func TestInitConfigDoesNotExposeTrustedWorkspace(t *testing.T) {
 	}
 	if strings.Contains(string(data), "trusted_workspace") {
 		t.Fatalf("config should not expose trusted_workspace: %s", string(data))
+	}
+}
+
+func TestInitCreatesPreferences(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AI_DISPATCH_HOME", home)
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"init", "--format", "json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	preferences, err := os.ReadFile(filepath.Join(home, "preferences.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"# ai-dispatch 偏好", "### 代码实现"} {
+		if !strings.Contains(string(preferences), want) {
+			t.Fatalf("preferences missing %q: %s", want, string(preferences))
+		}
+	}
+	for _, privateDefault := range []string{"默认代码 review：用 opus", "默认实现：用 gpt5.5", "grok：实时检索"} {
+		if strings.Contains(string(preferences), privateDefault) {
+			t.Fatalf("preferences should not contain user-specific default %q: %s", privateDefault, string(preferences))
+		}
 	}
 }
 
@@ -120,24 +265,43 @@ func TestConfigPathAndShow(t *testing.T) {
 	}
 }
 
-func TestGuideModelsPrintsBundledReference(t *testing.T) {
+func TestPreferencesPathAndShow(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AI_DISPATCH_HOME", home)
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"preferences", "path"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	if strings.TrimSpace(stdout.String()) != filepath.Join(home, "preferences.md") {
+		t.Fatalf("stdout=%s", stdout.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, "preferences.md")); !os.IsNotExist(err) {
+		t.Fatalf("preferences path should not create file, err=%v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Main([]string{"preferences", "show"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "### 代码实现") {
+		t.Fatalf("stdout=%s", stdout.String())
+	}
+}
+
+func TestGuideModelsPrintsRuntimeRegistryGuide(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Main([]string{"guide", "models"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%s", code, stderr.String())
 	}
 	text := stdout.String()
-	for _, want := range []string{"# 模型路由", "## 默认路由", "gpt5.5", "mimo", "provider_used"} {
+	for _, want := range []string{"# 模型指南", "## Built-in registry targets", "gpt5.5", "mimo-openrouter-pro", "provider_used"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in guide:\n%s", want, text)
 		}
-	}
-}
-
-func TestSanitizedClaudeProviderConfig(t *testing.T) {
-	model, baseURL, hasAPIBackend := sanitizedClaudeProviderConfig(`{"env":{"ANTHROPIC_MODEL":"z-ai/glm-5.2","ANTHROPIC_BASE_URL":"https://openrouter.ai/api","IGNORED_CREDENTIAL_FIELD":"redacted"}}`)
-	if model != "z-ai/glm-5.2" || baseURL != "https://openrouter.ai/api" || !hasAPIBackend {
-		t.Fatalf("model=%q baseURL=%q hasAPIBackend=%v", model, baseURL, hasAPIBackend)
 	}
 }
 
@@ -190,7 +354,19 @@ func TestModelsResolveJSON(t *testing.T) {
 
 func TestModelsListsRegistryAliases(t *testing.T) {
 	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
-	t.Setenv("AI_DISPATCH_MODEL_REGISTRY", writeCLIRegistry(t))
+	home := t.TempDir()
+	t.Setenv("AI_DISPATCH_HOME", home)
+	t.Setenv("AI_DISPATCH_CONFIG", filepath.Join(home, "config.json"))
+	writeCLIConfig(t, filepath.Join(home, "config.json"), `{
+  "version": 1,
+  "claude_transport": "print",
+  "models": {
+    "mimo-pro": [
+      { "provider": "opencode", "model": "openrouter/xiaomi/mimo-v2.5-pro" }
+    ]
+  },
+  "providers": {}
+}`)
 	var stdout, stderr bytes.Buffer
 	code := Main([]string{"models", "--format", "json"}, &stdout, &stderr)
 	if code != 0 {
@@ -202,10 +378,13 @@ func TestModelsListsRegistryAliases(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	for _, target := range []string{"mimo-v2.5-pro", "mimo", "kimi"} {
+	for _, target := range []string{"mimo-pro", "mimo-openrouter-pro", "kimi"} {
 		if !containsString(payload.Targets, target) {
 			t.Fatalf("missing %q in targets=%v", target, payload.Targets)
 		}
+	}
+	if containsString(payload.Targets, "mimo") {
+		t.Fatalf("ambiguous mimo alias should not be listed: %v", payload.Targets)
 	}
 }
 
@@ -263,7 +442,7 @@ func TestStdinPromptIsAccepted(t *testing.T) {
 
 func TestDefaultActivityTimeoutUsesLongerOpenCodeWindow(t *testing.T) {
 	var stderr bytes.Buffer
-	req, _, err := parseSend("send", []string{"mimo", "hello"}, &stderr)
+	req, _, err := parseSend("send", []string{"mimo-openrouter-pro", "hello"}, &stderr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,12 +456,38 @@ func TestDefaultActivityTimeoutUsesLongerOpenCodeWindow(t *testing.T) {
 	if req.ActivityTimeoutSeconds != 180 {
 		t.Fatalf("activity_timeout=%d", req.ActivityTimeoutSeconds)
 	}
-	req, _, err = parseSend("send", []string{"--activity-timeout", "0", "mimo", "hello"}, &stderr)
+	req, _, err = parseSend("send", []string{"--activity-timeout", "0", "mimo-openrouter-pro", "hello"}, &stderr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if req.ActivityTimeoutSeconds != 0 {
 		t.Fatalf("activity_timeout=%d", req.ActivityTimeoutSeconds)
+	}
+}
+
+func TestDefaultFixedTimeoutIsSet(t *testing.T) {
+	var stderr bytes.Buffer
+	req, _, err := parseSend("send", []string{"gpt5.5", "hello"}, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.TimeoutSeconds != 1800 {
+		t.Fatalf("timeout=%d", req.TimeoutSeconds)
+	}
+	req, _, err = parseSend("send", []string{"--timeout", "0", "gpt5.5", "hello"}, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.TimeoutSeconds != 0 {
+		t.Fatalf("timeout=%d", req.TimeoutSeconds)
+	}
+}
+
+func TestInvalidProviderOptFails(t *testing.T) {
+	var stderr bytes.Buffer
+	_, _, err := parseSend("send", []string{"gpt5.5", "hello", "--provider-opt", "claude.transprot=pty"}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "unsupported provider option") {
+		t.Fatalf("err=%v", err)
 	}
 }
 
@@ -504,6 +709,15 @@ func TestRunsFailuresSummarizesWithoutText(t *testing.T) {
 	}
 }
 
+func TestRunsFailuresRejectsUnsupportedFormat(t *testing.T) {
+	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"runs", "failures", "--format", "text"}, &stdout, &stderr)
+	if code != 2 || !strings.Contains(stderr.String(), "--format for runs failures must be json") {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+}
+
 func TestParseSinceRelativeDurations(t *testing.T) {
 	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
 	got, err := parseSince("7d", now)
@@ -548,33 +762,126 @@ func TestResumeRequiresExplicitSessionID(t *testing.T) {
 	}
 }
 
-func writeCLIRegistry(t *testing.T) string {
+func TestFirstRunSetupSummary(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AI_DISPATCH_HOME", home)
+	// Reset process-level state to simulate a fresh process.
+	lastSetupResult = nil
+
+	var stdout, stderr bytes.Buffer
+	code := MainWithInput([]string{"send", "gpt5.5", "--json-result"}, &stdout, &stderr, strings.NewReader("hello"))
+	// Provider execution is disabled in tests, so send fails — but config
+	// setup and first-run injection should still occur.
+	if code == 0 {
+		t.Fatalf("expected non-zero exit code, got code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+
+	// Verify setup progress on stderr. First send creates config state
+	// only; provider probing is reserved for init/providers scan.
+	stderrStr := stderr.String()
+	for _, want := range []string{"首次调用", "配置初始化完成", "继续执行任务"} {
+		if !strings.Contains(stderrStr, want) {
+			t.Errorf("stderr missing %q\ngot:\n%s", want, stderrStr)
+		}
+	}
+	if strings.Contains(stderrStr, "Provider 探测") {
+		t.Errorf("first send should not scan providers\ngot:\n%s", stderrStr)
+	}
+
+	// Verify JSON result has first_run + first_run_setup fields.
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal JSON: %v\nstdout=%s", err, stdout.String())
+	}
+	if payload["first_run"] != true {
+		t.Errorf("first_run = %v, want true", payload["first_run"])
+	}
+	hint, _ := payload["first_run_hint"].(string)
+	if !strings.Contains(hint, "preferences.md") {
+		t.Errorf("first_run_hint = %q, want preferences.md mention", hint)
+	}
+	boot, ok := payload["first_run_setup"].(map[string]any)
+	if !ok {
+		t.Fatalf("first_run_setup field missing or wrong type: %v", payload["first_run_setup"])
+	}
+	for _, key := range []string{"initialized_at", "home_dir", "config_path", "preferences_path", "claude_transport"} {
+		if _, ok := boot[key]; !ok {
+			t.Errorf("first_run_setup.%s missing", key)
+		}
+	}
+	if _, ok := boot["providers"]; ok {
+		t.Errorf("first send setup should not include provider scan: %v", boot["providers"])
+	}
+}
+
+func TestSecondRunNoSetup(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AI_DISPATCH_HOME", home)
+
+	// First call triggers config setup + first-run hint.
+	lastSetupResult = nil
+	var stdout1, stderr1 bytes.Buffer
+	MainWithInput([]string{"send", "gpt5.5", "--json-result"}, &stdout1, &stderr1, strings.NewReader("hello"))
+
+	// Second call should not trigger setup or hint.
+	lastSetupResult = nil
+	var stdout2, stderr2 bytes.Buffer
+	MainWithInput([]string{"send", "gpt5.5", "--json-result"}, &stdout2, &stderr2, strings.NewReader("hello"))
+
+	stderrStr := stderr2.String()
+	for _, unwanted := range []string{"首次调用", "配置初始化完成", "Provider 探测"} {
+		if strings.Contains(stderrStr, unwanted) {
+			t.Errorf("second run stderr should not contain %q\ngot:\n%s", unwanted, stderrStr)
+		}
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(stdout2.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal JSON: %v\nstdout=%s", err, stdout2.String())
+	}
+	if _, ok := payload["first_run"]; ok {
+		t.Errorf("second run should not have first_run field, got %v", payload["first_run"])
+	}
+	if _, ok := payload["first_run_setup"]; ok {
+		t.Errorf("second run should not have first_run_setup field, got %v", payload["first_run_setup"])
+	}
+}
+
+func TestInitDoesNotQueueFirstRunHint(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AI_DISPATCH_HOME", home)
+	lastSetupResult = nil
+
+	var initOut, initErr bytes.Buffer
+	code := Main([]string{"init", "--format", "json"}, &initOut, &initErr)
+	if code != 0 {
+		t.Fatalf("init code=%d stdout=%s stderr=%s", code, initOut.String(), initErr.String())
+	}
+
+	lastSetupResult = nil
+	var stdout, stderr bytes.Buffer
+	MainWithInput([]string{"send", "gpt5.5", "--json-result"}, &stdout, &stderr, strings.NewReader("hello"))
+
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal JSON: %v\nstdout=%s", err, stdout.String())
+	}
+	if _, ok := payload["first_run"]; ok {
+		t.Errorf("send after explicit init should not repeat first_run: %v", payload["first_run"])
+	}
+	if strings.Contains(stderr.String(), "首次调用") {
+		t.Errorf("send after explicit init should not print first-use message: %s", stderr.String())
+	}
+}
+
+func writeCLIConfig(t *testing.T, path string, data string) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "registry.json")
-	data := `{
-  "models": [
-    {
-      "key": "mimo-v2.5-pro",
-      "actualModelId": "openrouter/xiaomi/mimo-v2.5-pro",
-      "provider": "opencode",
-      "dispatchRunner": "opencode",
-      "dispatchModel": "openrouter/xiaomi/mimo-v2.5-pro",
-      "aliases": ["mimo"]
-    },
-    {
-      "key": "kimi-k2.7-code",
-      "actualModelId": "openrouter/moonshotai/kimi-k2.7-code",
-      "provider": "opencode",
-      "dispatchRunner": "opencode",
-      "dispatchModel": "openrouter/moonshotai/kimi-k2.7-code",
-      "aliases": ["kimi"]
-    }
-  ]
-}`
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return path
 }
 
 func containsString(values []string, target string) bool {

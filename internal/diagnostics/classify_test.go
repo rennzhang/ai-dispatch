@@ -67,6 +67,20 @@ func TestClassifyOpenCodePermissionAutorejectAsConfig(t *testing.T) {
 	}
 }
 
+func TestClassifyOpenCodeModelAvailabilityAsConfig(t *testing.T) {
+	cases := []string{
+		"OpenRouter: This model is not available in your region",
+		"No endpoints found for openrouter/example/model",
+		"model not found or you do not have access to this model",
+	}
+	for _, message := range cases {
+		got := Classify("OpenCode", "", message, "")
+		if got.Status != contract.StatusError || got.Class != contract.FailureConfig {
+			t.Fatalf("message=%q got=%+v", message, got)
+		}
+	}
+}
+
 func TestClassifyAntigravityEmptyOutputAsActionableConfig(t *testing.T) {
 	got := Classify("Antigravity", "", "", "agy completed without output")
 	if got.Status != contract.StatusError || got.Class != contract.FailureConfig {

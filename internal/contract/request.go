@@ -15,9 +15,5 @@ type DispatchRequest struct {
 	TimeoutSeconds         int                          `json:"timeout_seconds"`
 	ActivityTimeoutSeconds int                          `json:"activity_timeout_seconds"`
 	TaskName               string                       `json:"task_name,omitempty"`
-	CallerEnv              string                       `json:"caller_env,omitempty"`
-	CallerProvider         string                       `json:"caller_provider,omitempty"`
-	CallerModule           string                       `json:"caller_module,omitempty"`
-	NoMetaHeader           bool                         `json:"no_meta_header,omitempty"`
 	ProviderOpts           map[string]map[string]string `json:"provider_opts,omitempty"`
 }

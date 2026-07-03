@@ -13,5 +13,7 @@ jobs:
         with:
           go-version: "1.24"
           cache: false
-      - run: go test ./...
+      - run: AI_DISPATCH_GO_PROVIDER_EXECUTION=off go test ./...
       - run: scripts/go_active_caller_check.sh
+      - run: bash -n scripts/install-remote.sh scripts/release.sh skills/ai-dispatch/scripts/ai-dispatch
+      - run: scripts/release.sh

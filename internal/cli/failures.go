@@ -56,9 +56,12 @@ func runsFailures(argv []string, stderr io.Writer) (failureSummary, error) {
 	since := fs.String("since", "", "filter by RFC3339 timestamp or relative duration like 24h/7d")
 	limit := fs.Int("limit", 50, "maximum number of failure records to return; 0 returns all")
 	includeDegraded := fs.Bool("include-degraded", true, "include successful runs that degraded to a fallback provider")
-	_ = fs.String("format", "json", "json")
+	format := fs.String("format", "json", "json")
 	if err := fs.Parse(argv); err != nil {
 		return failureSummary{}, err
+	}
+	if *format != "json" {
+		return failureSummary{}, fmt.Errorf("--format for runs failures must be json")
 	}
 	filter := runstore.ListFilter{
 		Status:       contract.Status(*status),

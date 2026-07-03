@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/rennzhang/ai-dispatch/internal/config"
@@ -27,10 +26,10 @@ func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 	if transport == "pty" {
 		return buildPTY(req)
 	}
-	return buildAPI(req), nil
+	return buildAPI(req)
 }
 
-func buildAPI(req providers.BuildRequest) runtime.CommandSpec {
+func buildAPI(req providers.BuildRequest) (runtime.CommandSpec, error) {
 	args := []string{
 		"claude",
 		"-p",
@@ -44,13 +43,20 @@ func buildAPI(req providers.BuildRequest) runtime.CommandSpec {
 	if req.SessionID != "" {
 		args = append(args, "--resume", req.SessionID)
 	}
-	if req.Target.Model != "" {
+	if shouldPassClaudeModel(req) {
 		args = append(args, "--model", req.Target.Model)
 	}
-	if req.Prompt != "" {
+	var stdin []byte
+	if req.PromptFile != "" {
+		data, err := os.ReadFile(req.PromptFile)
+		if err != nil {
+			return runtime.CommandSpec{}, fmt.Errorf("cannot read prompt file for claude: %w", err)
+		}
+		stdin = data
+	} else if req.Prompt != "" {
 		args = append(args, req.Prompt)
 	}
-	return runtime.CommandSpec{Args: args, Env: claudeEnv("")}
+	return runtime.CommandSpec{Args: args, Env: claudeEnv(""), Stdin: stdin}, nil
 }
 
 func buildPTY(req providers.BuildRequest) (runtime.CommandSpec, error) {
@@ -71,7 +77,7 @@ func buildPTY(req providers.BuildRequest) (runtime.CommandSpec, error) {
 		driverTimeout = timeout - 5
 	}
 	claudeArgs := []string{"claude", "--dangerously-skip-permissions"}
-	if req.Target.Model != "" {
+	if shouldPassClaudeModel(req) {
 		claudeArgs = append(claudeArgs, "--model", req.Target.Model)
 	}
 	if req.SessionID != "" {
@@ -88,7 +94,6 @@ func buildPTY(req providers.BuildRequest) (runtime.CommandSpec, error) {
 	}
 	args := append([]string{}, driver...)
 	args = append(args,
-		"--stream",
 		"--transport", "tmux",
 		"--cwd", cwd,
 		"--startup-wait", "30",
@@ -427,6 +432,21 @@ func isClaudeErrorText(text string) bool {
 	return false
 }
 
+func shouldPassClaudeModel(req providers.BuildRequest) bool {
+	if strings.TrimSpace(req.Target.Model) == "" {
+		return false
+	}
+	if hasClaudeAPIBackend(processClaudeEnv()) {
+		switch req.Target.Source {
+		case "registry", "alias", "inferred":
+			if strings.TrimSpace(req.Target.ActualID) != "" && strings.TrimSpace(req.Target.ActualID) != strings.TrimSpace(req.Target.Model) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func effectiveTransport(req providers.BuildRequest) string {
 	if req.ProviderOptions != nil {
 		if value := req.ProviderOptions["transport"]; value != "" {
@@ -482,35 +502,11 @@ func ptyDriverCommand() ([]string, error) {
 
 func claudeEnv(sessionID string) []string {
 	env := map[string]string{}
-	for _, item := range os.Environ() {
-		if strings.HasPrefix(item, "CLAUDECODE=") ||
-			strings.HasPrefix(item, "CLAUDE_SESSION_ID=") ||
-			strings.HasPrefix(item, "AI_DISPATCH_CLAUDE_SESSION_ID=") {
-			continue
-		}
-		key, value, ok := strings.Cut(item, "=")
-		if !ok || key == "" {
-			continue
-		}
-		env[key] = value
-	}
 	if sessionID != "" {
 		env["CLAUDE_SESSION_ID"] = sessionID
 		env["AI_DISPATCH_CLAUDE_SESSION_ID"] = sessionID
 	}
-	if os.Getenv("TERM") == "dumb" {
-		env["TERM"] = "xterm-256color"
-	}
-	keys := make([]string, 0, len(env))
-	for key := range env {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	out := make([]string, 0, len(keys))
-	for _, key := range keys {
-		out = append(out, key+"="+env[key])
-	}
-	return out
+	return runtime.SanitizedEnv(env)
 }
 
 func processClaudeEnv() map[string]string {

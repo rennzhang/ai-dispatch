@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Dev convenience wrapper: auto-rebuilds from source and runs the binary.
+# The Go binary owns its own defaults (AI_DISPATCH_GO_PROVIDER_EXECUTION=on,
+# ~/.ai-dispatch as home). For dev/testing set
+# AI_DISPATCH_GO_PROVIDER_EXECUTION=off to skip real provider calls.
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CACHE_DIR="${AI_DISPATCH_GO_CACHE_DIR:-${AI_DISPATCH_CACHE_DIR:-${HOME:-/tmp}/.ai-dispatch/cache}/go-build}"
+CACHE_DIR="${AI_DISPATCH_GO_CACHE_DIR:-${HOME:-/tmp}/.ai-dispatch/cache}/go-build"
 CACHE_BIN="$CACHE_DIR/ai-dispatch-go"
 
 needs_rebuild=0
@@ -24,6 +29,4 @@ if [[ "$needs_rebuild" == "1" ]]; then
   mv "$tmp_bin" "$CACHE_BIN"
 fi
 
-export AI_DISPATCH_GO_PROVIDER_EXECUTION="${AI_DISPATCH_GO_PROVIDER_EXECUTION:-on}"
-export AI_DISPATCH_ROOT="${AI_DISPATCH_ROOT:-$ROOT}"
 exec "$CACHE_BIN" "$@"

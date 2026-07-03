@@ -3,12 +3,14 @@
 package dispatch
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 )
 
-func acquireFileLock(path string) (func(), error) {
+func acquireFileLock(ctx context.Context, path string) (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
@@ -16,9 +18,21 @@ func acquireFileLock(path string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
-		_ = file.Close()
-		return nil, err
+	for {
+		err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if err != syscall.EWOULDBLOCK {
+			_ = file.Close()
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			_ = file.Close()
+			return nil, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 	return func() {
 		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)

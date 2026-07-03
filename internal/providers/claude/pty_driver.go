@@ -68,7 +68,6 @@ func parsePTYDriverArgs(argv []string, stderr io.Writer) (ptyDriverConfig, error
 	inputFile := fs.String("input-file", "", "input prompt file")
 	sessionID := fs.String("session-id", "", "session id")
 	claudeBaseDir := fs.String("claude-base-dir", filepath.Join(os.Getenv("HOME"), ".claude"), "Claude base dir")
-	_ = fs.Bool("stream", false, "accepted for compatibility")
 	if err := fs.Parse(argv); err != nil {
 		return ptyDriverConfig{}, err
 	}

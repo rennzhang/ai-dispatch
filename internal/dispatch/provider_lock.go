@@ -1,23 +1,27 @@
 package dispatch
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	execruntime "github.com/rennzhang/ai-dispatch/internal/runtime"
 )
 
-var openCodeInProcessLock sync.Mutex
+var openCodeInProcessLock = make(chan struct{}, 1)
 
-func withProviderExecutionLock(provider string, run func() execruntime.RunResult) execruntime.RunResult {
+func withProviderExecutionLock(ctx context.Context, provider string, run func() execruntime.RunResult) execruntime.RunResult {
 	if provider != "opencode" || strings.EqualFold(os.Getenv("AI_DISPATCH_OPENCODE_LOCK"), "off") {
 		return run()
 	}
-	openCodeInProcessLock.Lock()
-	defer openCodeInProcessLock.Unlock()
-	release, err := acquireFileLock(openCodeLockPath())
+	select {
+	case openCodeInProcessLock <- struct{}{}:
+		defer func() { <-openCodeInProcessLock }()
+	case <-ctx.Done():
+		return lockTimeoutResult()
+	}
+	release, err := acquireFileLock(ctx, openCodeLockPath())
 	if err != nil {
 		return execruntime.RunResult{
 			ExitCode: 1,
@@ -26,6 +30,15 @@ func withProviderExecutionLock(provider string, run func() execruntime.RunResult
 	}
 	defer release()
 	return run()
+}
+
+func lockTimeoutResult() execruntime.RunResult {
+	return execruntime.RunResult{
+		ExitCode:     124,
+		TimedOut:     true,
+		FixedTimeout: true,
+		Error:        "timed out waiting for opencode execution lock",
+	}
 }
 
 func openCodeLockPath() string {

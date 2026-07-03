@@ -17,6 +17,8 @@ printf 'Reply exactly: OK\n' >"$prompt"
 go build -o "$bin" ./cmd/ai-dispatch
 
 export AI_DISPATCH_RUNS_DIR="$tmpdir/runs"
+export AI_DISPATCH_HOME="$tmpdir/home"
+export AI_DISPATCH_GO_PROVIDER_EXECUTION=off
 
 expect_disabled() {
   local name="$1"
@@ -70,7 +72,7 @@ expect_success() {
   "$bin" "$@" >/tmp/ai-dispatch-active-caller.stdout
 }
 
-expect_disabled "autopilot-worker" \
+expect_disabled "worker-codex" \
   send \
   codex \
   --prompt-file "$prompt" \
@@ -79,10 +81,9 @@ expect_disabled "autopilot-worker" \
   --activity-timeout 180 \
   --json-result \
   --stream-progress \
-  --caller-module autopilot-worker \
   -o "$output"
 
-expect_disabled_plain "autopilot-governor-claude" \
+expect_disabled_plain "reviewer-claude" \
   send \
   claude \
   --prompt-file "$prompt" \
@@ -90,10 +91,9 @@ expect_disabled_plain "autopilot-governor-claude" \
   --cwd "$ROOT" \
   --timeout 0 \
   --activity-timeout 180 \
-  --stream-progress \
-  --caller-module autopilot-governor
+  --stream-progress
 
-expect_disabled "agent-bridge-claude-pty" \
+expect_disabled "bridge-claude-pty" \
   send \
   claude \
   --json-result \
@@ -107,7 +107,7 @@ expect_disabled "agent-bridge-claude-pty" \
   --cwd "$ROOT" \
   "hello"
 
-expect_disabled "agent-chat-codex" \
+expect_disabled "chat-codex" \
   send \
   codex \
   --json-result \
@@ -115,15 +115,12 @@ expect_disabled "agent-chat-codex" \
   --timeout 0 \
   --activity-timeout 300 \
   --model gpt-5.5 \
-  --session-id sid-wx \
+  --session-id sid-chat \
   --session-provider codex \
   --cwd "$ROOT" \
-  --caller-env chat \
-  --caller-module agent-chat \
-  --caller-provider codex/gpt-5.5 \
   "hello"
 
-expect_disabled "agent-workflow-codex" \
+expect_disabled "workflow-codex" \
   send \
   codex \
   --json-result \
@@ -134,9 +131,6 @@ expect_disabled "agent-workflow-codex" \
   --session-id sid-workflow \
   --session-provider codex \
   --cwd "$ROOT" \
-  --caller-env workflow \
-  --caller-module agent-workflow \
-  --caller-provider codex/gpt-5.5 \
   "hello"
 
 expect_disabled "dispatch-skill-task-name" \

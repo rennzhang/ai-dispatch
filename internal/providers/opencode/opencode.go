@@ -31,68 +31,59 @@ func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 	if err != nil {
 		return runtime.CommandSpec{}, err
 	}
-	args := []string{bin, "run", "--format", format, "--title", "ai-dispatch", "--pure", "--dangerously-skip-permissions"}
+	args := []string{bin, "run", "--format", format, "--title", "ai-dispatch", "--pure", "--auto"}
 	if req.Target.Model != "" {
 		args = append(args, "--model", req.Target.Model)
 	}
 	if req.SessionID != "" {
 		args = append(args, "--session", req.SessionID)
 	}
-	prompt, err := promptText(req)
-	if err != nil {
-		return runtime.CommandSpec{}, err
+	if req.PromptFile != "" {
+		args = append(args, "--file", req.PromptFile)
+		args = append(args, "Read the attached prompt file and follow it exactly.")
+		return runtime.CommandSpec{Args: args, Env: runtime.SanitizedEnv(nil)}, nil
 	}
-	if prompt != "" {
-		args = append(args, prompt)
+	if req.Prompt != "" {
+		args = append(args, req.Prompt)
 	}
-	return runtime.CommandSpec{Args: args}, nil
+	return runtime.CommandSpec{Args: args, Env: runtime.SanitizedEnv(nil)}, nil
 }
 
 func openCodeBinary() (string, error) {
 	if explicit := strings.TrimSpace(os.Getenv("AI_DISPATCH_OPENCODE_BIN")); explicit != "" {
-		if path, err := executablePath(explicit); err == nil {
+		if path, err := executablePath(explicit, "AI_DISPATCH_OPENCODE_BIN override"); err == nil {
 			return path, nil
+		} else {
+			return "", err
 		}
-		return "", fmt.Errorf("opencode binary not found at AI_DISPATCH_OPENCODE_BIN=%s", explicit)
 	}
 	if path, err := exec.LookPath("opencode"); err == nil {
 		return path, nil
 	}
 	home, err := os.UserHomeDir()
 	if err == nil {
-		if path, err := executablePath(filepath.Join(home, ".opencode", "bin", "opencode")); err == nil {
+		if path, err := executablePath(filepath.Join(home, ".opencode", "bin", "opencode"), "opencode fallback"); err == nil {
 			return path, nil
 		}
 	}
 	return "", fmt.Errorf("opencode binary not found; install OpenCode or set AI_DISPATCH_OPENCODE_BIN")
 }
 
-func executablePath(candidate string) (string, error) {
+func executablePath(candidate string, label string) (string, error) {
 	if path, err := exec.LookPath(candidate); err == nil {
 		return path, nil
 	}
+	if !strings.Contains(candidate, string(os.PathSeparator)) {
+		return "", fmt.Errorf("%s is not executable or not found", label)
+	}
 	info, err := os.Stat(candidate)
 	if err != nil || info.IsDir() {
-		return "", fmt.Errorf("not executable: %s", candidate)
+		return "", fmt.Errorf("%s is not executable or not found", label)
 	}
 	if info.Mode().Perm()&0o111 == 0 {
-		return "", fmt.Errorf("not executable: %s", candidate)
+		return "", fmt.Errorf("%s is not executable or not found", label)
 	}
 	return candidate, nil
-}
-
-func promptText(req providers.BuildRequest) (string, error) {
-	if req.Prompt != "" {
-		return req.Prompt, nil
-	}
-	if req.PromptFile == "" {
-		return "", nil
-	}
-	data, err := os.ReadFile(req.PromptFile)
-	if err != nil {
-		return "", fmt.Errorf("cannot read prompt file for opencode: %w", err)
-	}
-	return string(data), nil
 }
 
 func (Provider) Parse(run runtime.RunResult, req providers.BuildRequest) contract.ProviderResult {

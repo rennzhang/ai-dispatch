@@ -3,6 +3,7 @@ package codex
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/rennzhang/ai-dispatch/internal/contract"
@@ -30,14 +31,21 @@ func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 		}
 		args = append(args, "--model", req.Target.Model)
 	}
-	prompt := req.Prompt
+	var stdin []byte
 	if req.SessionID != "" {
 		args = append(args, "resume", req.SessionID)
 	}
-	if prompt != "" {
-		args = append(args, prompt)
+	if req.PromptFile != "" {
+		data, err := os.ReadFile(req.PromptFile)
+		if err != nil {
+			return runtime.CommandSpec{}, fmt.Errorf("cannot read prompt file for codex: %w", err)
+		}
+		stdin = data
+		args = append(args, "-")
+	} else if req.Prompt != "" {
+		args = append(args, req.Prompt)
 	}
-	return runtime.CommandSpec{Args: args}, nil
+	return runtime.CommandSpec{Args: args, Env: runtime.SanitizedEnv(nil), Stdin: stdin}, nil
 }
 
 func (Provider) Parse(run runtime.RunResult, req providers.BuildRequest) contract.ProviderResult {

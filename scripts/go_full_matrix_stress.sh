@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REGISTRY="${AI_DISPATCH_MODEL_REGISTRY:-$ROOT/config/models.json}"
 REPORT_DIR="${AI_DISPATCH_FULL_STRESS_REPORT_DIR:-$(mktemp -d -t ai-dispatch-go-stress.XXXXXX)}"
 RUNS_DIR="$REPORT_DIR/runs"
+TARGETS_FILE="$REPORT_DIR/targets.json"
 
 mkdir -p "$RUNS_DIR"
 cd "$ROOT"
@@ -121,10 +121,11 @@ NODE
 
 run_case "doctor_json" bin/ai-dispatch doctor --format json
 run_case "models_json" bin/ai-dispatch models --format json
+bin/ai-dispatch models --format json >"$TARGETS_FILE"
 
 while IFS= read -r target; do
   run_case "resolve_${target}" bin/ai-dispatch models resolve "$target" --format json
-done < <(jq -r 'if env.AI_DISPATCH_SKIP_AGY == "on" then .models[] | select((.dispatchRunner // .provider) != "antigravity") | .key else .models[] | .key end' "$REGISTRY")
+done < <(jq -r '.targets[]' "$TARGETS_FILE")
 
 run_case "resolve_provider_explicit_model_codex_gpt54" bin/ai-dispatch models resolve codex --model gpt5.4 --format json
 run_case "resolve_gemini" bin/ai-dispatch models resolve gemini --format json
@@ -132,14 +133,16 @@ run_case "cli_input_missing_EXPECT_ERROR" bin/ai-dispatch send gpt5.5 --json-res
 run_case "cli_prompt_too_short_EXPECT_ERROR" bin/ai-dispatch send gpt5.5 x --json-result
 run_case "cli_bad_cwd_EXPECT_ERROR" bin/ai-dispatch send gpt5.5 "hello" --cwd "$REPORT_DIR/missing" --json-result
 
-while IFS= read -r encoded; do
-  key="$(printf '%s' "$encoded" | base64 --decode | jq -r '.key')"
-  provider="$(printf '%s' "$encoded" | base64 --decode | jq -r '.provider')"
+while IFS= read -r key; do
+  provider="$(bin/ai-dispatch models resolve "$key" --format json | jq -r '.Provider // .provider')"
+  if [[ "${AI_DISPATCH_SKIP_AGY:-}" == "on" && "$provider" == "antigravity" ]]; then
+    continue
+  fi
   marker="OK_${key//[^A-Za-z0-9]/_}"
   run_case "provider_${provider}_${key}_EXPECT_${marker}" \
     bin/ai-dispatch send "$key" "Reply exactly: ${marker}" \
       --json-result --stream-progress --timeout 180 --activity-timeout 90 --task-name "stress-${key}"
-done < <(jq -r 'if env.AI_DISPATCH_SKIP_AGY == "on" then .models[] | select((.dispatchRunner // .provider) != "antigravity") | @base64 else .models[] | @base64 end' "$REGISTRY")
+done < <(jq -r '.targets[]' "$TARGETS_FILE")
 
 PROMPT_FILE="$REPORT_DIR/prompt.md"
 printf 'Reply exactly: PROMPT_FILE_OK\n' >"$PROMPT_FILE"
@@ -165,10 +168,9 @@ run_case "claude_explicit_model_flag_EXPECT_CLAUDE_MODEL_OK" \
   bin/ai-dispatch send claude "Reply exactly: CLAUDE_MODEL_OK" \
     --model sonnet --json-result --timeout 120 --activity-timeout 60
 
-run_case "caller_flags_no_meta_EXPECT_CALLER_OK" \
+run_case "task_name_metadata_EXPECT_CALLER_OK" \
   bin/ai-dispatch send gpt5.5 "Reply exactly: CALLER_OK" \
-    --json-result --timeout 180 --activity-timeout 90 \
-    --caller-env local --caller-provider codex --caller-module ai-dispatch-stress --no-meta-header
+    --json-result --timeout 180 --activity-timeout 90 --task-name "stress-metadata"
 
 run_case "timeout_short_EXPECT_TIMEOUT" \
   bin/ai-dispatch send gpt5.5 "Sleep for 10 seconds then reply exactly: SHOULD_NOT_FINISH" \
@@ -182,7 +184,7 @@ SESSION="$(
   node -e '
 const fs = require("fs");
 const rows = fs.readFileSync(process.argv[1], "utf8").trim().split(/\n/).filter(Boolean).map(JSON.parse);
-const row = rows.find((item) => item.name.startsWith("provider_opencode_mimo-v2.5-pro") && item.session_id);
+const row = rows.find((item) => item.name.startsWith("provider_opencode_mimo-openrouter-pro") && item.session_id);
 process.stdout.write(row ? row.session_id : "");
 ' "$REPORT_DIR/summary.jsonl"
 )"

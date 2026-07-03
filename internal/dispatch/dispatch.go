@@ -34,37 +34,14 @@ func ExecuteWithOptions(req contract.DispatchRequest, opts Options) contract.Pro
 	if err != nil {
 		return contract.ErrorResult(contract.StatusError, contract.FailureInput, err.Error(), 2)
 	}
-	target = applyRoutePolicy(target)
 	if os.Getenv("AI_DISPATCH_GO_PROVIDER_EXECUTION") != "on" {
 		result := contract.ErrorResult(contract.StatusDisabled, contract.FailureConfig, "go provider execution is disabled; set AI_DISPATCH_GO_PROVIDER_EXECUTION=on for explicit smoke", 3)
 		result.RequestedTarget = target.Requested
 		result.ProviderUsed = target.Provider
+		ensureRouteMetadata(&result, target, 0)
 		return result
 	}
-	result := executeTarget(req, target, opts)
-	if shouldAutoDegrade(req, target, result) {
-		fallbackTarget := routing.DispatchTarget{
-			Requested: target.Requested,
-			Provider:  "codex",
-			Model:     "gpt-5.5",
-			Source:    "fallback",
-		}
-		fallbackReq := req
-		fallbackReq.SessionID = ""
-		fallbackReq.SessionProvider = ""
-		fallback := executeTarget(fallbackReq, fallbackTarget, opts)
-		degradeReason := degradeReason(result, fallbackTarget)
-		fallback.RequestedTarget = target.Requested
-		fallback.RouteTrace = append(append([]string{}, result.RouteTrace...), fallback.RouteTrace...)
-		fallback.RouteSteps = append(append([]contract.RouteStep{}, result.RouteSteps...), fallback.RouteSteps...)
-		fallback.Degraded = true
-		fallback.DegradeReason = degradeReason
-		fallback.Warnings = append([]string{degradeReason}, fallback.Warnings...)
-		if req.SessionID != "" {
-			fallback.Warnings = append(fallback.Warnings, "discarded incompatible claude session for codex fallback")
-		}
-		result = fallback
-	}
+	result := executeCandidates(req, target, opts)
 	if req.OutputFile != "" && result.OK {
 		if err := output.WriteFile(req.OutputFile, result); err != nil {
 			failure := contract.FailureRuntime
@@ -84,12 +61,57 @@ func ExecuteWithOptions(req contract.DispatchRequest, opts Options) contract.Pro
 	return result
 }
 
+func executeCandidates(req contract.DispatchRequest, target routing.DispatchTarget, opts Options) contract.ProviderResult {
+	candidates := routing.CandidateTargets(target)
+	var routeTrace []string
+	var routeSteps []contract.RouteStep
+	var degradeReasons []string
+	for i, candidate := range candidates {
+		attemptReq := req
+		if i > 0 {
+			attemptReq.SessionID = ""
+			attemptReq.SessionProvider = ""
+		}
+		result := executeTarget(attemptReq, candidate, opts)
+		routeTrace = append(routeTrace, result.RouteTrace...)
+		routeSteps = append(routeSteps, result.RouteSteps...)
+		if result.OK {
+			return finalizeCandidateResult(result, target.Requested, routeTrace, routeSteps, degradeReasons)
+		}
+		if i == len(candidates)-1 || !shouldTryNextCandidate(req, result) {
+			return finalizeCandidateResult(result, target.Requested, routeTrace, routeSteps, degradeReasons)
+		}
+		degradeReasons = append(degradeReasons, degradeReason(result, candidates[i+1]))
+	}
+	return contract.ErrorResult(contract.StatusError, contract.FailureConfig, "no route candidates available", 2)
+}
+
+func finalizeCandidateResult(result contract.ProviderResult, requested string, routeTrace []string, routeSteps []contract.RouteStep, degradeReasons []string) contract.ProviderResult {
+	if requested != "" {
+		result.RequestedTarget = requested
+	}
+	if len(routeTrace) > 0 {
+		result.RouteTrace = routeTrace
+	}
+	if len(routeSteps) > 0 {
+		result.RouteSteps = routeSteps
+	}
+	if len(degradeReasons) > 0 {
+		reason := strings.Join(degradeReasons, "; ")
+		result.Degraded = true
+		result.DegradeReason = reason
+		result.Warnings = append([]string{reason}, result.Warnings...)
+	}
+	return result
+}
+
 func executeTarget(req contract.DispatchRequest, target routing.DispatchTarget, opts Options) contract.ProviderResult {
 	p, ok := providerFor(target.Provider)
 	if !ok {
 		result := contract.ErrorResult(contract.StatusDisabled, contract.FailureConfig, "provider is not implemented in go runtime: "+target.Provider, 3)
 		result.RequestedTarget = target.Requested
 		result.ProviderUsed = target.Provider
+		ensureRouteMetadata(&result, target, 0)
 		return result
 	}
 	buildReq := providers.BuildRequest{
@@ -100,7 +122,7 @@ func executeTarget(req contract.DispatchRequest, target routing.DispatchTarget, 
 		SessionID:              req.SessionID,
 		TimeoutSeconds:         req.TimeoutSeconds,
 		ActivityTimeoutSeconds: req.ActivityTimeoutSeconds,
-		ProviderOptions:        flattenProviderOpts(req.ProviderOpts[target.Provider]),
+		ProviderOptions:        req.ProviderOpts[target.Provider],
 	}
 	spec, err := p.Build(buildReq)
 	if err != nil {
@@ -108,6 +130,7 @@ func executeTarget(req contract.DispatchRequest, target routing.DispatchTarget, 
 		result := contract.ErrorResult(contract.StatusError, failure, err.Error(), exitCode)
 		result.RequestedTarget = target.Requested
 		result.ProviderUsed = target.Provider
+		ensureRouteMetadata(&result, target, 0)
 		return result
 	}
 	spec.CWD = req.CWD
@@ -119,8 +142,16 @@ func executeTarget(req contract.DispatchRequest, target routing.DispatchTarget, 
 		hooks.Stdout = emitter.Feed
 		hooks.Stderr = emitter.Feed
 	}
-	run := withProviderExecutionLock(target.Provider, func() execruntime.RunResult {
-		return execruntime.RunProcess(context.Background(), spec, execruntime.RunOptions{
+	ctx := context.Background()
+	var cancel context.CancelFunc
+	if req.TimeoutSeconds > 0 {
+		ctx, cancel = context.WithTimeout(ctx, seconds(req.TimeoutSeconds))
+	} else {
+		ctx, cancel = context.WithCancel(ctx)
+	}
+	defer cancel()
+	run := withProviderExecutionLock(ctx, target.Provider, func() execruntime.RunResult {
+		return execruntime.RunProcess(ctx, spec, execruntime.RunOptions{
 			FixedTimeout:    seconds(req.TimeoutSeconds),
 			ActivityTimeout: seconds(req.ActivityTimeoutSeconds),
 		}, hooks)
@@ -140,11 +171,11 @@ func executeTarget(req contract.DispatchRequest, target routing.DispatchTarget, 
 	return result
 }
 
-func shouldAutoDegrade(req contract.DispatchRequest, target routing.DispatchTarget, result contract.ProviderResult) bool {
-	if os.Getenv("AI_DISPATCH_AUTO_DEGRADE") == "off" {
+func shouldTryNextCandidate(req contract.DispatchRequest, result contract.ProviderResult) bool {
+	if req.Command != "send" || result.OK {
 		return false
 	}
-	if req.Command != "send" || target.Provider != "claude" || result.OK {
+	if isPermissionRejection(result.Stderr) {
 		return false
 	}
 	if result.FailureClass == nil {
@@ -158,46 +189,73 @@ func shouldAutoDegrade(req contract.DispatchRequest, target routing.DispatchTarg
 	}
 }
 
+func isPermissionRejection(message string) bool {
+	lower := strings.ToLower(message)
+	return strings.Contains(lower, "permission requested") ||
+		strings.Contains(lower, "auto-rejecting") ||
+		strings.Contains(lower, "permission denied")
+}
+
 func degradeReason(previous contract.ProviderResult, fallback routing.DispatchTarget) string {
 	failure := ""
 	if previous.FailureClass != nil {
 		failure = "/" + string(*previous.FailureClass)
 	}
+	previousLabel := previous.ProviderUsed
+	if previous.ModelUsed != "" {
+		previousLabel += ":" + previous.ModelUsed
+	}
 	label := fallback.Provider
 	if fallback.Model != "" {
 		label += ":" + fallback.Model
 	}
-	return fmt.Sprintf("%s failed with %s%s; switched to %s", previous.ProviderUsed, previous.Status, failure, label)
+	return fmt.Sprintf("%s failed with %s%s; switched to %s", previousLabel, previous.Status, failure, label)
 }
 
 func resolveTarget(req contract.DispatchRequest) (routing.DispatchTarget, error) {
 	if req.Command == "resume" {
-		target := routing.DispatchTarget{
-			Requested: req.Target,
-			Provider:  req.SessionProvider,
-			Model:     req.Model,
-			Source:    "session",
+		target := routing.DispatchTarget{Source: "session"}
+		record, ok, err := runstore.FindBySessionID("", req.SessionID)
+		if err != nil {
+			return routing.DispatchTarget{}, err
 		}
-		if target.Provider == "" {
-			target.Provider = req.Target
+		if ok && record.Result != nil {
+			target.Requested = firstNonEmpty(record.Result.RequestedTarget, record.Result.ProviderUsed)
+			target.Provider = record.Result.ProviderUsed
+			target.Model = firstNonEmpty(req.Model, record.Result.ModelUsed)
 		}
-		if target.Requested == "" {
-			target.Requested = target.Provider
-		}
-		if target.Provider == "" {
-			record, ok, err := runstore.FindBySessionID("", req.SessionID)
+		if req.Target != "" {
+			resolved, err := routing.Resolve(req.Target, req.Model)
 			if err != nil {
 				return routing.DispatchTarget{}, err
 			}
-			if ok && record.Result != nil {
-				target.Requested = firstNonEmpty(record.Result.RequestedTarget, record.Result.ProviderUsed)
-				target.Provider = record.Result.ProviderUsed
-				target.Model = firstNonEmpty(target.Model, record.Result.ModelUsed)
+			if target.Provider != "" && resolved.Provider != target.Provider {
+				return routing.DispatchTarget{}, fmt.Errorf("session_id %q belongs to provider %q, not %q", req.SessionID, target.Provider, resolved.Provider)
 			}
+			target = resolved
+			target.Source = "session"
+		} else if req.SessionProvider != "" {
+			resolved, err := routing.Resolve(req.SessionProvider, req.Model)
+			if err != nil {
+				return routing.DispatchTarget{}, err
+			}
+			if target.Provider != "" && resolved.Provider != target.Provider {
+				return routing.DispatchTarget{}, fmt.Errorf("session_id %q belongs to provider %q, not %q", req.SessionID, target.Provider, resolved.Provider)
+			}
+			target.Provider = resolved.Provider
+			target.Model = firstNonEmpty(resolved.Model, target.Model)
+			target.Requested = firstNonEmpty(target.Requested, req.SessionProvider)
+		} else if req.Model != "" && target.Provider != "" {
+			resolved, err := routing.Resolve(target.Provider, req.Model)
+			if err != nil {
+				return routing.DispatchTarget{}, err
+			}
+			target.Model = resolved.Model
 		}
 		if target.Provider == "" {
 			return routing.DispatchTarget{}, fmt.Errorf("cannot infer provider for session_id %q; pass --target or --session-provider", req.SessionID)
 		}
+		target.Requested = firstNonEmpty(target.Requested, target.Provider)
 		return target, nil
 	}
 	return routing.Resolve(req.Target, req.Model)
@@ -216,10 +274,6 @@ func providerFor(name string) (providers.Provider, bool) {
 	default:
 		return nil, false
 	}
-}
-
-func applyRoutePolicy(target routing.DispatchTarget) routing.DispatchTarget {
-	return target
 }
 
 func buildFailure(err error) (contract.FailureClass, int) {
@@ -255,13 +309,6 @@ func ensureRouteMetadata(result *contract.ProviderResult, target routing.Dispatc
 			DurationMS: durationMS,
 		}}
 	}
-}
-
-func flattenProviderOpts(opts map[string]string) map[string]string {
-	if opts == nil {
-		return nil
-	}
-	return opts
 }
 
 func firstNonEmpty(values ...string) string {

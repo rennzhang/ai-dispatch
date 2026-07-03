@@ -45,7 +45,7 @@ func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 	} else if req.Prompt != "" {
 		args = append(args, "--prompt", req.Prompt)
 	}
-	return runtime.CommandSpec{Args: args}, nil
+	return runtime.CommandSpec{Args: args, Env: runtime.SanitizedEnv(nil)}, nil
 }
 
 func (Provider) Parse(run runtime.RunResult, req providers.BuildRequest) contract.ProviderResult {

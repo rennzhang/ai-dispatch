@@ -11,7 +11,7 @@ Preferred change order:
 Run before sending changes:
 
 ```bash
-go test ./...
+AI_DISPATCH_GO_PROVIDER_EXECUTION=off go test ./...
 scripts/go_active_caller_check.sh
 ```
 

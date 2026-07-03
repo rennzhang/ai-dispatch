@@ -1,3 +1,115 @@
 #!/usr/bin/env bash
 set -euo pipefail
-exec "${AI_DISPATCH_BIN:-${HOME}/.ai-dispatch/bin/ai-dispatch}" "$@"
+
+REPO="rennzhang/ai-dispatch"
+
+# Resolve real location (handles symlinks from `skills add`)
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+HERE="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+SKILL_DIR="$(cd "$HERE/.." && pwd)"
+
+# Release tarballs include the binary next to this wrapper.
+LOCAL_BIN="$HERE/ai-dispatch-go"
+if [ -x "$LOCAL_BIN" ]; then
+  exec "$LOCAL_BIN" "$@"
+fi
+
+VERSION_FILE="$SKILL_DIR/VERSION"
+if [ ! -f "$VERSION_FILE" ]; then
+  echo "ai-dispatch: missing VERSION file in skill directory" >&2
+  exit 1
+fi
+VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
+if [ -z "$VERSION" ] || [ "$VERSION" = "dev" ]; then
+  echo "ai-dispatch: VERSION is '$VERSION'; install from a released skill or use the curl installer" >&2
+  exit 1
+fi
+
+OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64|amd64) ARCH="amd64" ;;
+  aarch64|arm64) ARCH="arm64" ;;
+  *) echo "ai-dispatch: unsupported architecture: $ARCH" >&2; exit 1 ;;
+esac
+case "$OS" in
+  darwin|linux) ;;
+  *) echo "ai-dispatch: unsupported OS: $OS" >&2; exit 1 ;;
+esac
+
+CACHE_DIR="${AI_DISPATCH_HOME:-$HOME/.ai-dispatch}/bin"
+CACHED_BIN="$CACHE_DIR/ai-dispatch-go-${VERSION}-${OS}-${ARCH}"
+if [ -x "$CACHED_BIN" ]; then
+  exec "$CACHED_BIN" "$@"
+fi
+
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    echo "ai-dispatch: no SHA256 tool found (need sha256sum or shasum)" >&2
+    return 1
+  fi
+}
+
+TARBALL="ai-dispatch-${OS}-${ARCH}.tar.gz"
+BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
+TARBALL_URL="${BASE_URL}/${TARBALL}"
+CHECKSUMS_URL="${BASE_URL}/SHA256SUMS"
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+echo "ai-dispatch: downloading ${TARBALL} (${VERSION})..." >&2
+if ! curl -fsSL "$TARBALL_URL" -o "$tmp/$TARBALL"; then
+  echo "ai-dispatch: failed to download $TARBALL_URL" >&2
+  echo "ai-dispatch: install from a released tag, or use the curl installer after publishing the release" >&2
+  exit 1
+fi
+if ! curl -fsSL "$CHECKSUMS_URL" -o "$tmp/SHA256SUMS"; then
+  echo "ai-dispatch: failed to download $CHECKSUMS_URL" >&2
+  exit 1
+fi
+
+expected="$(grep " ${TARBALL}\$" "$tmp/SHA256SUMS" | awk '{print $1}')"
+if [ -z "$expected" ]; then
+  echo "ai-dispatch: ${TARBALL} not found in SHA256SUMS" >&2
+  exit 1
+fi
+actual="$(sha256_file "$tmp/$TARBALL")"
+if [ "$expected" != "$actual" ]; then
+  echo "ai-dispatch: checksum mismatch for ${TARBALL}" >&2
+  echo "  expected: $expected" >&2
+  echo "  actual:   $actual" >&2
+  exit 1
+fi
+
+tar -xzf "$tmp/$TARBALL" -C "$tmp"
+pkgdir="$tmp/ai-dispatch-${OS}-${ARCH}"
+extracted="$pkgdir/scripts/ai-dispatch-go"
+if [ ! -x "$extracted" ]; then
+  echo "ai-dispatch: tarball missing scripts/ai-dispatch-go" >&2
+  exit 1
+fi
+if [ -f "$pkgdir/VERSION" ]; then
+  pkg_version="$(tr -d '[:space:]' < "$pkgdir/VERSION")"
+  if [ "$pkg_version" != "$VERSION" ]; then
+    echo "ai-dispatch: tarball VERSION mismatch: expected $VERSION, got $pkg_version" >&2
+    exit 1
+  fi
+fi
+
+mkdir -p "$CACHE_DIR"
+tmp_bin="$CACHED_BIN.tmp.$$"
+cp "$extracted" "$tmp_bin"
+chmod +x "$tmp_bin"
+mv "$tmp_bin" "$CACHED_BIN"
+
+exec "$CACHED_BIN" "$@"

@@ -2,6 +2,8 @@
 
 package dispatch
 
-func acquireFileLock(path string) (func(), error) {
+import "context"
+
+func acquireFileLock(ctx context.Context, path string) (func(), error) {
 	return func() {}, nil
 }

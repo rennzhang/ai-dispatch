@@ -5,8 +5,11 @@
 ## Public Entry
 
 ```bash
-~/.ai-dispatch/bin/ai-dispatch send <target> "prompt" --json-result --stream-progress
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch send <target> "prompt" --json-result --stream-progress
 ```
+
+The installed skill entry is a light wrapper. It downloads the release binary
+matching `skills/ai-dispatch/VERSION` into the local runtime cache when needed.
 
 Development entry:
 
@@ -50,11 +53,10 @@ Default state lives under `~/.ai-dispatch`:
 
 ```text
 config.json
-bin/ai-dispatch
+preferences.md
+bin/ai-dispatch-go-<version>-<platform>
 runs/
-cache/
 logs/
-hooks/
 ```
 
 ## Provider Rules
@@ -62,13 +64,14 @@ hooks/
 - Unsupported providers fail closed.
 - Runtime/tool/task failures are not hidden by fallback.
 - Claude defaults to `claude -p`; PTY is explicit config or provider option.
-- Model routing uses the bundled registry unless `AI_DISPATCH_MODEL_REGISTRY` or `models.registry_path` overrides it.
+- Model routing uses `config.json` `models` first, then the bundled registry, then provider inference.
 
 ## Validation
 
 ```bash
-go test ./...
+AI_DISPATCH_GO_PROVIDER_EXECUTION=off go test ./...
 scripts/go_active_caller_check.sh
+scripts/release.sh
 scripts/go_provider_smoke.sh
 ```
 

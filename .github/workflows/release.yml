@@ -1,0 +1,34 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
+      - name: Run tests
+        run: |
+          AI_DISPATCH_GO_PROVIDER_EXECUTION=off go test ./...
+      - name: Build tarballs
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          scripts/release.sh "$tag"
+      - name: Create release and upload assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release create "$tag" dist/*.tar.gz dist/SHA256SUMS \
+            --title "$tag" \
+            --generate-notes

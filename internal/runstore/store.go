@@ -1,6 +1,7 @@
 package runstore
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -37,7 +38,15 @@ func DefaultRoot() string {
 }
 
 func NewRunID(now time.Time) string {
-	return now.Format("20060102-150405.000")
+	return now.Format("20060102-150405.000000000") + "-" + randomSuffix()
+}
+
+func randomSuffix() string {
+	var data [3]byte
+	if _, err := rand.Read(data[:]); err != nil {
+		return "000000"
+	}
+	return fmt.Sprintf("%06x", data)
 }
 
 func WriteResult(root string, runID string, result contract.ProviderResult) error {
@@ -50,6 +59,9 @@ func WriteResultWithTask(root string, runID string, taskName string, result cont
 	}
 	if runID == "" {
 		runID = NewRunID(time.Now())
+	}
+	if !validRunID(runID) {
+		return fmt.Errorf("invalid run id")
 	}
 	dir := filepath.Join(root, runID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -95,18 +107,27 @@ func ListFiltered(root string, filter ListFilter) ([]RunRecord, error) {
 		return nil, err
 	}
 	records := []RunRecord{}
+	invalid := []string{}
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
+		if !listableRunDirName(entry.Name()) {
+			continue
+		}
 		record, err := Read(root, entry.Name())
 		if err != nil {
+			invalid = append(invalid, entry.Name())
 			continue
 		}
 		if !matchesFilter(record, filter) {
 			continue
 		}
 		records = append(records, record)
+	}
+	if len(invalid) > 0 {
+		sort.Strings(invalid)
+		return nil, fmt.Errorf("invalid run record(s): %s", strings.Join(invalid, ", "))
 	}
 	sort.Slice(records, func(i, j int) bool {
 		return records[i].RunID > records[j].RunID
@@ -159,6 +180,9 @@ func Read(root string, query string) (RunRecord, error) {
 	if query == "" {
 		return RunRecord{}, fmt.Errorf("run id is required")
 	}
+	if !validRunID(query) {
+		return RunRecord{}, fmt.Errorf("invalid run id")
+	}
 	dir := filepath.Join(root, query)
 	data, err := os.ReadFile(filepath.Join(dir, "run.json"))
 	if err != nil {
@@ -172,6 +196,41 @@ func Read(root string, query string) (RunRecord, error) {
 		record.Path = dir
 	}
 	return record, nil
+}
+
+func validRunID(value string) bool {
+	if value == "" || strings.Contains(value, "..") {
+		return false
+	}
+	for _, r := range value {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			continue
+		}
+		switch r {
+		case '-', '_', '.':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func listableRunDirName(value string) bool {
+	if !validRunID(value) {
+		return false
+	}
+	if strings.HasPrefix(value, "run-") {
+		return true
+	}
+	if len(value) < len("20060102-150405.000000000-000000") {
+		return false
+	}
+	if value[len("20060102-150405.000000000")] != '-' {
+		return false
+	}
+	_, err := time.Parse("20060102-150405.000000000", value[:len("20060102-150405.000000000")])
+	return err == nil
 }
 
 func FindBySessionID(root string, sessionID string) (RunRecord, bool, error) {

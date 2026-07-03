@@ -20,22 +20,31 @@
 
 如果 Agent 拿到的是这个仓库地址，先用这份 README 理解怎么安装、验证和排查。安装完成后，日常任务执行应优先依赖已安装的 skill 和 `references/*.md` 子规范。
 
+安装完成后，真实调用前先读取用户偏好再选择 target/model：
+
+```bash
+pref_path="$(~/.claude/skills/ai-dispatch/scripts/ai-dispatch preferences path)"
+cat "$pref_path"
+```
+
 使用安装版二进制，不要调用源码路径：
 
 ```bash
-~/.ai-dispatch/bin/ai-dispatch send <target> "<task>" \
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch send <target> "<task>" \
   --cwd "$PWD" \
   --json-result \
   --stream-progress \
   --task-name <name>
 ```
 
+Codex 安装时路径为 `~/.codex/skills/ai-dispatch/scripts/ai-dispatch`。
+
 长 prompt 先写入文件，再传 `--prompt-file`。
 
 只有拿到上一轮真实返回的 `session_id` 时，才使用 resume：
 
 ```bash
-~/.ai-dispatch/bin/ai-dispatch resume --session-id <id> "<delta>" \
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch resume --session-id <id> "<delta>" \
   --json-result \
   --stream-progress \
   --task-name <name>-r2
@@ -59,25 +68,16 @@
 查看内置模型路由指南：
 
 ```bash
-~/.ai-dispatch/bin/ai-dispatch guide models
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch guide models
 ```
 
-README 只保留快速口径；模型选择真源以 `ai-dispatch guide models` 输出为准。
-
-快速默认口径：
-
-- `gpt5.5` / `codex`：代码实现、修复、测试、仓库内工程推进。
-- `mimo`：前端 UI、视觉布局、低成本候选。
-- `kimi`：前端探索、长上下文 coding、规划。
-- `grok`：快速工程分析、代码理解、第二视角。
-- `sonnet`：稳定 review、重构、规划、文本推理。
-- `opus`：架构决策、困难 review、高风险规划。
+README 不维护模型能力真源。用户默认选择以 `~/.ai-dispatch/preferences.md` 为准，真实路由以 `ai-dispatch models resolve` 返回为准。
 
 假设某个 target 可用前，先查真实路由：
 
 ```bash
-~/.ai-dispatch/bin/ai-dispatch models
-~/.ai-dispatch/bin/ai-dispatch models resolve <target> --format json
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch models
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch models resolve <target> --format json
 ```
 
 ## 默认支持的 Provider
@@ -90,87 +90,133 @@ README 只保留快速口径；模型选择真源以 `ai-dispatch guide models` 
 | --- | --- |
 | `codex`, `gpt5.5` | `codex exec` |
 | `claude`, `sonnet`, `opus` | 默认 `claude -p`；可选 PTY 模式 |
-| `opencode`, `mimo`, `kimi`, OpenRouter models | `opencode run` |
+| `opencode`, `mimo-openrouter-pro`, `mimo-opencode-free`, `kimi`, OpenRouter models | `opencode run` |
 | `antigravity`, `gemini`, `gemini-flash`, `gemini-pro` | `agy --print` |
 
 ## 安装
 
-从源码仓库安装：
+### 方式一：npx skills add（推荐）
+
+通过 [skills](https://www.npmjs.com/package/skills) CLI 从 GitHub 仓库安装 skill。skill 只带轻量 wrapper；第一次运行 wrapper 时会按 `VERSION` 下载对应 release binary，并校验 checksum：
 
 ```bash
-scripts/install.sh
+# Claude Code
+npx skills add rennzhang/ai-dispatch -g --agent claude-code
+
+# Codex
+npx skills add rennzhang/ai-dispatch -g --agent codex
+
+# 全部
+npx skills add rennzhang/ai-dispatch -g --all
 ```
 
-安装后会生成：
-
-```text
-~/.ai-dispatch/bin/ai-dispatch
-~/.ai-dispatch/config.json
-~/.ai-dispatch/runs/
-~/.ai-dispatch/cache/
-~/.ai-dispatch/logs/
-```
-
-同时会把内置 skill 安装到用户级 skill 根目录：
-
-```text
-~/.codex/skills/ai-dispatch
-~/.claude/skills/ai-dispatch
-```
-
-这是元 skill 的推荐安装方式：用户级安装一次，然后所有项目里的 Agent 都调用同一个 `~/.ai-dispatch/bin/ai-dispatch`。
-
-手动安装：
+安装完成后验证：
 
 ```bash
-HOME_DIR="${AI_DISPATCH_HOME:-${HOME}/.ai-dispatch}"
-CACHE_BASE="${AI_DISPATCH_CACHE_DIR:-$HOME_DIR/cache}"
-CACHE_DIR="${AI_DISPATCH_GO_CACHE_DIR:-$CACHE_BASE/go-build}"
-mkdir -p "$HOME_DIR/bin" "$CACHE_DIR"
-go build -o "$CACHE_DIR/ai-dispatch-go" ./cmd/ai-dispatch
-cat > "$HOME_DIR/bin/ai-dispatch" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-HOME_DIR="${AI_DISPATCH_HOME:-${HOME}/.ai-dispatch}"
-CACHE_DIR="${AI_DISPATCH_GO_CACHE_DIR:-${AI_DISPATCH_CACHE_DIR:-$HOME_DIR/cache}/go-build}"
-CACHE_BIN="$CACHE_DIR/ai-dispatch-go"
-export AI_DISPATCH_GO_PROVIDER_EXECUTION="${AI_DISPATCH_GO_PROVIDER_EXECUTION:-on}"
-export AI_DISPATCH_ROOT="${AI_DISPATCH_ROOT:-$HOME_DIR}"
-exec "$CACHE_BIN" "$@"
-EOF
-chmod +x "$HOME_DIR/bin/ai-dispatch"
-"$HOME_DIR/bin/ai-dispatch" init --claude-transport print
-"$HOME_DIR/bin/ai-dispatch" skill install --target all
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch doctor --format json
 ```
+
+首次执行 wrapper 可能先准备 CLI 二进制；进入 Go CLI 后，首次 `send`/`resume` 才会初始化 `~/.ai-dispatch/` 配置（生成 config 和 preferences，不扫描 provider）。首次 JSON 结果附 `first_run` + `first_run_setup` 字段。
+
+### 方式二：一键安装
+
+curl 一行安装，自动检测平台、下载预编译包、解压到 skill 目录并验证：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rennzhang/ai-dispatch/main/scripts/install-remote.sh | bash
+```
+
+环境变量：
+
+- `AI_DISPATCH_SKILL_TARGET`：`claude`、`codex` 或 `all`（默认 `all`）
+- `AI_DISPATCH_VERSION`：指定版本 tag，默认 `latest`
+
+只装一侧：
+
+```bash
+AI_DISPATCH_SKILL_TARGET=claude bash -c "$(curl -fsSL https://raw.githubusercontent.com/rennzhang/ai-dispatch/main/scripts/install-remote.sh)"
+```
+
+### 安装后的目录结构
+
+skill 只带 wrapper 和版本号；二进制缓存到本机运行态：
+
+```text
+~/.claude/skills/ai-dispatch/
+  SKILL.md
+  VERSION
+  references/{preferences,config,provider-onboarding}.md
+  agents/openai.yaml
+  scripts/ai-dispatch                      # bash wrapper（按 VERSION 下载 release binary）
+```
+
+运行时状态在 `~/.ai-dispatch/`（首次使用自动创建）：
+
+```text
+~/.ai-dispatch/
+  config.json
+  preferences.md
+  runs/
+  logs/
+  bin/
+```
+
+### 从旧版升级
+
+旧版把 wrapper 放在 `~/.ai-dispatch/bin/ai-dispatch`、编译缓存在 `~/.ai-dispatch/cache/`。改版后 wrapper 只在 skill 目录，`~/.ai-dispatch/bin/` 只存按版本下载的 runtime binary。旧 wrapper 和旧缓存可以安全删除：
+
+```bash
+rm -f ~/.ai-dispatch/bin/ai-dispatch
+rm -rf ~/.ai-dispatch/cache
+```
+
+重新安装 skill 或运行 curl installer 即可迁移。首次 `send`/`resume` 会补齐缺失的 `config.json` 或 `preferences.md`。
+
+## Agent 安装指令
+
+如果 Agent 拿到这个 README 并被要求安装 ai-dispatch，推荐用 `npx skills add`：
+
+```bash
+npx skills add rennzhang/ai-dispatch -g --agent claude-code
+```
+
+或一键安装：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rennzhang/ai-dispatch/main/scripts/install-remote.sh | bash
+```
+
+安装完成后验证：
+
+```bash
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch doctor --format json
+```
+
+然后读取用户偏好，根据偏好选择 target/model：
+
+```bash
+pref_path="$(~/.claude/skills/ai-dispatch/scripts/ai-dispatch preferences path)"
+cat "$pref_path"
+```
+
+首次调用 `send` 或 `resume` 时，Go CLI 会初始化配置目录（`~/.ai-dispatch/`），生成 config 和 preferences，不扫描 provider，并在 JSON 结果中附 `first_run`、`first_run_hint` 和 `first_run_setup` 字段。Agent 应将初始化结果简要汇报给用户，然后继续执行原任务。
 
 ## 配置
 
-初始化一次：
+首次 send/resume 会自动做最小配置初始化。手动 `init` 会同时扫描 provider：
 
 ```bash
-~/.ai-dispatch/bin/ai-dispatch init --claude-transport print
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch init --claude-transport print
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch init --force   # 覆盖现有 config
 ```
 
 查看配置：
 
 ```bash
-~/.ai-dispatch/bin/ai-dispatch config path
-~/.ai-dispatch/bin/ai-dispatch config show
-```
-
-默认配置：
-
-```json
-{
-  "version": 1,
-  "claude_transport": "print",
-  "models": {
-    "registry_path": ""
-  },
-  "hooks": {
-    "notify_command": ""
-  }
-}
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch config path
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch config show
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch preferences path
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch preferences show
 ```
 
 `claude_transport` 可选值：
@@ -180,25 +226,64 @@ chmod +x "$HOME_DIR/bin/ai-dispatch"
 - `auto`：检测到 Anthropic API 环境变量时走 `print`，否则走 `pty`。
 - `disabled`：Claude target 直接失败关闭。
 
-模型路由默认使用内置 registry。只有需要本地覆盖时，才设置 `AI_DISPATCH_MODEL_REGISTRY` 或 `models.registry_path`。
+模型路由默认使用内置 registry；用户自己的短名路由写在 `~/.ai-dispatch/config.json` 的 `models` 字段。
+
+示例：
+
+```json
+{
+  "models": {
+    "mimo-pro": [
+      { "provider": "opencode", "model": "openrouter/xiaomi/mimo-v2.5-pro" },
+      { "provider": "opencode", "model": "opencode/mimo-v2.5-free" }
+    ]
+  }
+}
+```
+
+## Provider 扫描
+
+重新探测本机 provider 可用性和 opencode catalog 模型数量：
+
+```bash
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch providers scan --format json
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch providers scan --refresh  # 联网刷新 opencode 模型缓存
+```
+
+安装新 provider CLI 后或 opencode 认证变更后运行。结果只写入 `~/.ai-dispatch/config.json` 的 `providers` 字段。
+
+扫描只证明 provider CLI 存在、能返回版本；opencode 的 `catalog_model_count` 只表示已认证 provider 在 catalog 里可见的模型数量。订阅、额度、地区封锁、OpenRouter 单模型 endpoint 是否可用，以真实 `send` 失败时的 `failure_class` 为准。
+
+## 用户偏好
+
+用户模型选择偏好放在 `~/.ai-dispatch/preferences.md`。Agent 在真实调用前必须先读它，再选择 target/model；用户明确指定 target/model 时，用户指定优先。
+
+查看偏好路径和内容：
+
+```bash
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch preferences path
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch preferences show
+```
+
+用默认程序打开编辑：
+
+```bash
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch preferences open
+```
+
+偏好文件只记录用户自己的默认倾向，例如哪些模型适合 review、前端 UI、Bug 查找、写文档或代码实现。偏好的维护方式看安装后 skill 的 `references/preferences.md`；公共 target 能力和真实路由看 `guide models`、`models` 和 `models resolve`。
 
 ## Skill 与文档
 
-安装后的日常 Agent 入口是内置 skill。安装或刷新：
-
-```bash
-~/.ai-dispatch/bin/ai-dispatch skill install --target all
-```
-
-只安装单侧时使用 `--target codex` 或 `--target claude`。
+安装后的日常 Agent 入口是内置 skill。
 
 安装后的 skill 包含精简运行说明和子规范：
 
 ```text
 ~/.codex/skills/ai-dispatch/SKILL.md
-~/.codex/skills/ai-dispatch/references/model-routing.md
+~/.codex/skills/ai-dispatch/VERSION
+~/.codex/skills/ai-dispatch/references/preferences.md
 ~/.codex/skills/ai-dispatch/references/config.md
-~/.codex/skills/ai-dispatch/references/notifications.md
 ~/.codex/skills/ai-dispatch/references/provider-onboarding.md
 ```
 
@@ -206,22 +291,19 @@ chmod +x "$HOME_DIR/bin/ai-dispatch"
 
 ```text
 skills/ai-dispatch/
-internal/cli/skill_assets/ai-dispatch/
 ```
-
-`internal/cli/skill_assets/ai-dispatch/` 是 `go:embed` 使用的嵌入副本；`skill install` 和 `guide models` 都来自这里。修改 skill 文档时，两处必须同步。
 
 最常用的模型指南也可以直接通过 CLI 查看：
 
 ```bash
-~/.ai-dispatch/bin/ai-dispatch guide models
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch guide models
 ```
 
 README 和内置 skill 使用同一套产品口径，但职责不同：
 
-- README：仓库级上手入口，给需要从源码安装、验证、打包或排查 ai-dispatch 的人和 Agent 看。
+- README：仓库级上手入口，给需要验证、打包或排查 ai-dispatch 的人和 Agent 看。
 - `SKILL.md`：安装后 Agent 日常执行任务时读取的精简运行说明。
-- `references/*.md`：模型路由、配置、通知、provider 接入等子规范。
+- `references/*.md`：偏好、配置、provider 接入等子规范。
 
 安装完成后，日常使用优先看已安装 skill 和 references，不需要反复回到仓库 README。
 
@@ -230,22 +312,24 @@ README 和内置 skill 使用同一套产品口径，但职责不同：
 先确认安装版运行时和配置：
 
 ```bash
-~/.ai-dispatch/bin/ai-dispatch doctor --format json
-~/.ai-dispatch/bin/ai-dispatch config show
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch doctor --format json
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch config show
 ```
+
+`doctor` 只输出健康摘要，不回显本机路径、完整模型路由或环境变量具体值。需要定位文件时使用 `config path`、`preferences path`。
 
 确认 target 路由：
 
 ```bash
-~/.ai-dispatch/bin/ai-dispatch models
-~/.ai-dispatch/bin/ai-dispatch models resolve <target> --format json
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch models
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch models resolve <target> --format json
 ```
 
 回看失败：
 
 ```bash
-~/.ai-dispatch/bin/ai-dispatch runs failures --since 24h
-~/.ai-dispatch/bin/ai-dispatch runs show <run-id>
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch runs failures --since 24h
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch runs show <run-id>
 ```
 
 如果 provider 失败，先看 `failure_class`：`config` 通常是二进制、认证、账号、地区或环境变量问题；`quota` 是额度；`timeout` 是超时；`network` 是网络；`runtime` 是 provider 进程或输出协议异常。
@@ -253,9 +337,9 @@ README 和内置 skill 使用同一套产品口径，但职责不同：
 ## 运行历史
 
 ```bash
-~/.ai-dispatch/bin/ai-dispatch runs list --limit 20
-~/.ai-dispatch/bin/ai-dispatch runs show <run-id>
-~/.ai-dispatch/bin/ai-dispatch runs failures --since 24h
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch runs list --limit 20
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch runs show <run-id>
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch runs failures --since 24h
 ```
 
 默认 run 记录在 `~/.ai-dispatch/runs`。
@@ -276,6 +360,9 @@ README 和内置 skill 使用同一套产品口径，但职责不同：
 - `session_id`
 - `next_action`
 - `failure_class`
+- `first_run`（仅首次配置初始化时出现）
+- `first_run_hint`（仅首次配置初始化时出现）
+- `first_run_setup`（仅首次配置初始化时出现，含 `initialized_at`、`home_dir`、`config_path`、`preferences_path`、`claude_transport`）
 
 调用方必须信任 `provider_used` 和 `model_used`，不要信任请求时的 target。
 
@@ -283,15 +370,12 @@ README 和内置 skill 使用同一套产品口径，但职责不同：
 
 部分 provider CLI 可以编辑文件或执行 shell 命令。只在允许这种行为的工作区里使用 ai-dispatch。
 
-通知 hook 里不要发送 prompt 正文、模型回复正文、secret、完整 stderr、个人路径或原始配置。
-
 ## 验证安装
 
 ```bash
-scripts/install.sh
-~/.ai-dispatch/bin/ai-dispatch doctor --format json
-~/.ai-dispatch/bin/ai-dispatch config show
-~/.ai-dispatch/bin/ai-dispatch guide models
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch doctor --format json
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch config show
+~/.claude/skills/ai-dispatch/scripts/ai-dispatch guide models
 ```
 
 ## 开发与测试
@@ -299,8 +383,14 @@ scripts/install.sh
 静态和单元验证：
 
 ```bash
-go test ./...
+AI_DISPATCH_GO_PROVIDER_EXECUTION=off go test ./...
 scripts/go_active_caller_check.sh
+```
+
+真实 provider 执行默认开启（`AI_DISPATCH_GO_PROVIDER_EXECUTION` 默认 `on`，由二进制内部设置）。开发/测试时需显式关闭以避免真实调用：
+
+```bash
+AI_DISPATCH_GO_PROVIDER_EXECUTION=off go test ./...
 ```
 
 真实 provider smoke：
@@ -319,3 +409,17 @@ scripts/go_full_matrix_stress.sh
 ```
 
 当本机账号或地区不可用 Antigravity/Gemini 时，使用 `AI_DISPATCH_SKIP_AGY=on`。
+
+## 打包发布
+
+交叉编译预编译包：
+
+```bash
+scripts/release.sh
+# CI / GitHub Release 使用 tag 做硬校验：
+scripts/release.sh vX.Y.Z
+```
+
+产出 `dist/` 下 darwin/linux × amd64/arm64 四个自包含 tarball，每个含 `SKILL.md` + `VERSION` + `LICENSE` + `references/` + `agents/` + `scripts/ai-dispatch` (wrapper) + `scripts/ai-dispatch-go` (预编译二进制)。
+
+`npx skills add` 安装的是轻量 skill；wrapper 按 `VERSION` 下载对应 release tarball。发版前确保 `skills/ai-dispatch/VERSION` 与 tag 一致；release workflow 会强制校验，不一致直接失败。

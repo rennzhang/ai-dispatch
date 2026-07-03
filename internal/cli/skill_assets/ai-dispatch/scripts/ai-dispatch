@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-exec "${AI_DISPATCH_BIN:-${HOME}/.ai-dispatch/bin/ai-dispatch}" "$@"
