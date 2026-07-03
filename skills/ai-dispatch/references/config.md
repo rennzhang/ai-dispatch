@@ -45,7 +45,7 @@ ai-dispatch init --force
 | 字段 | 说明 |
 |---|---|
 | `claude_transport` | Claude 调用方式：`print`、`pty`、`auto`、`disabled` |
-| `models` | 用户认可的模型路由表；key 是短名，value 是按顺序尝试的候选数组 |
+| `models` | 用户已经确认并主动加入的本机模型候选池；key 是短名，value 是按顺序尝试的候选数组 |
 | `models.<name>[].provider` | 真实 provider：`codex`、`claude`、`opencode`、`antigravity` |
 | `models.<name>[].model` | 传给底层 provider CLI 的真实 model id |
 | `providers` | provider CLI 诊断摘要，由 `init` 或 `providers scan` 更新 |
@@ -53,7 +53,15 @@ ai-dispatch init --force
 | `providers.<name>.version` | provider CLI 版本 |
 | `providers.opencode.catalog_model_count` | opencode 已认证 provider 的 catalog 模型数量摘要，不证明逐模型可运行 |
 
-`models` 是可执行路由，`preferences.md` 是场景偏好，`providers` 是诊断摘要。不要把三者混在一起。
+`models` 是可执行短名路由，也是用户自己维护的可用模型候选池；`preferences.md` 是场景偏好，`providers` 是诊断摘要。不要把三者混在一起。
+
+需要查看用户已经添加并主动维护的模型池时，读 `config.json` 的 `models` 字段：
+
+```bash
+ai-dispatch config show
+```
+
+`providers.opencode.catalog_model_count` 只是 catalog 数量摘要，不代表这些模型都经过用户确认或真实可调用。
 
 ## 模型解析顺序
 
