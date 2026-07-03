@@ -39,8 +39,8 @@ func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 		args = append(args, "--session", req.SessionID)
 	}
 	if req.PromptFile != "" {
-		args = append(args, "--file", req.PromptFile)
 		args = append(args, "Read the attached prompt file and follow it exactly.")
+		args = append(args, "--file", req.PromptFile)
 		return runtime.CommandSpec{Args: args, Env: runtime.SanitizedEnv(nil)}, nil
 	}
 	if req.Prompt != "" {

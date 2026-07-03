@@ -71,6 +71,19 @@ func TestBuildOpenCodePromptFileUsesAttachment(t *testing.T) {
 	if !strings.Contains(joined, "--file\x00"+promptFile) {
 		t.Fatalf("prompt file not attached: %#v", spec.Args)
 	}
+	fileIdx := -1
+	instructionIdx := -1
+	for i, arg := range spec.Args {
+		if arg == "--file" {
+			fileIdx = i
+		}
+		if arg == "Read the attached prompt file and follow it exactly." {
+			instructionIdx = i
+		}
+	}
+	if instructionIdx < 0 || fileIdx < 0 || instructionIdx > fileIdx {
+		t.Fatalf("opencode --file is an array option; instruction must come before --file: %#v", spec.Args)
+	}
 }
 
 func TestBuildOpenCodeUsesUserInstallPathWhenPATHMisses(t *testing.T) {
