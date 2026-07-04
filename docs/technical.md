@@ -4,7 +4,20 @@
 
 ## 安装形态
 
-推荐通过 skill 安装：
+推荐通过 curl 安装 CLI，并按需安装 skill：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rennzhang/ai-dispatch/main/scripts/install-remote.sh | bash
+```
+
+只安装 CLI：
+
+```bash
+AI_DISPATCH_SKILL_TARGET=none \
+  curl -fsSL https://raw.githubusercontent.com/rennzhang/ai-dispatch/main/scripts/install-remote.sh | bash
+```
+
+也可以只通过 skill 安装：
 
 ```bash
 npx skills add rennzhang/ai-dispatch -g --agent claude-code
@@ -12,15 +25,9 @@ npx skills add rennzhang/ai-dispatch -g --agent codex
 npx skills add rennzhang/ai-dispatch -g --all
 ```
 
-也可以用一键安装脚本：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/rennzhang/ai-dispatch/main/scripts/install-remote.sh | bash
-```
+通过 curl 安装时，安装脚本会下载 release tarball，把稳定 CLI 写到 `~/.ai-dispatch/bin/ai-dispatch`，并把 `ai-dispatch` 链接到 `~/.local/bin/`。如果不想创建 PATH 链接，设置 `AI_DISPATCH_LINK_DIR=none`。
 
 通过 `npx skills add` 安装时，skill 目录里只有轻量 wrapper。第一次执行 wrapper 时，它会按 `VERSION` 下载对应 GitHub Release tarball，并校验 checksum。
-
-通过 curl 安装时，安装脚本会直接下载 release tarball，把 wrapper 和当前平台的预编译二进制一起放入 skill 目录。
 
 ## 路径
 
@@ -36,6 +43,13 @@ Codex 安装入口：
 ~/.codex/skills/ai-dispatch/scripts/ai-dispatch
 ```
 
+稳定 CLI 入口：
+
+```bash
+~/.ai-dispatch/bin/ai-dispatch
+ai-dispatch  # 如果 ~/.local/bin 在 PATH 中
+```
+
 本机运行态：
 
 ```text
@@ -47,21 +61,21 @@ Codex 安装入口：
   bin/
 ```
 
-`bin/` 保存 wrapper 下载的 release binary 缓存。`runs/` 保存每次调用的结构化结果。
+`bin/` 保存稳定 CLI wrapper 和按版本缓存的 release binary。`runs/` 保存每次调用的结构化结果。
 
 ## CLI
 
 直接派发：
 
 ```bash
-~/.claude/skills/ai-dispatch/scripts/ai-dispatch send opus "review current diff" \
+ai-dispatch send opus "review current diff" \
   --cwd "$PWD" --json-result --stream-progress --task-name review-opus
 ```
 
 长 prompt：
 
 ```bash
-~/.claude/skills/ai-dispatch/scripts/ai-dispatch send opus \
+ai-dispatch send opus \
   --prompt-file /tmp/review.md \
   --cwd "$PWD" \
   --json-result \
@@ -72,7 +86,7 @@ Codex 安装入口：
 继续上一轮：
 
 ```bash
-~/.claude/skills/ai-dispatch/scripts/ai-dispatch resume --session-id <id> "focus on the delta" \
+ai-dispatch resume --session-id <id> "focus on the delta" \
   --json-result --stream-progress --task-name review-opus-r2
 ```
 
@@ -101,13 +115,13 @@ Codex 安装入口：
 查看可用 target：
 
 ```bash
-~/.claude/skills/ai-dispatch/scripts/ai-dispatch models
+ai-dispatch models
 ```
 
 解析真实路由：
 
 ```bash
-~/.claude/skills/ai-dispatch/scripts/ai-dispatch models resolve opus --format json
+ai-dispatch models resolve opus --format json
 ```
 
 路由顺序：
@@ -126,8 +140,8 @@ Codex 安装入口：
 主动扫描 provider CLI：
 
 ```bash
-~/.claude/skills/ai-dispatch/scripts/ai-dispatch providers scan --format json
-~/.claude/skills/ai-dispatch/scripts/ai-dispatch providers scan --refresh
+ai-dispatch providers scan --format json
+ai-dispatch providers scan --refresh
 ```
 
 扫描只更新 `~/.ai-dispatch/config.json` 的 `providers` 字段。它证明 provider CLI 看起来存在、能返回版本；不证明订阅、额度、地区封锁或 OpenRouter 单模型 endpoint 可用。
@@ -135,9 +149,9 @@ Codex 安装入口：
 ## Run history
 
 ```bash
-~/.claude/skills/ai-dispatch/scripts/ai-dispatch runs list --limit 20
-~/.claude/skills/ai-dispatch/scripts/ai-dispatch runs show <run-id>
-~/.claude/skills/ai-dispatch/scripts/ai-dispatch runs failures --since 24h
+ai-dispatch runs list --limit 20
+ai-dispatch runs show <run-id>
+ai-dispatch runs failures --since 24h
 ```
 
 `runs list` 只输出安全摘要。完整结果看 `runs show`。
@@ -158,14 +172,14 @@ Codex 安装入口：
 `doctor` 是排查命令，不是普通安装后的必跑步骤：
 
 ```bash
-~/.claude/skills/ai-dispatch/scripts/ai-dispatch doctor --format json
+ai-dispatch doctor --format json
 ```
 
 它只输出健康摘要，不回显本机路径、完整模型路由或环境变量具体值。需要定位文件时用：
 
 ```bash
-~/.claude/skills/ai-dispatch/scripts/ai-dispatch config path
-~/.claude/skills/ai-dispatch/scripts/ai-dispatch preferences path
+ai-dispatch config path
+ai-dispatch preferences path
 ```
 
 ## 开发验证

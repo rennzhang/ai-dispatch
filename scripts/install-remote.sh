@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Remote installer for ai-dispatch skill.
+# Remote installer for ai-dispatch CLI and optional skills.
 # Downloads a precompiled tarball from GitHub Releases, verifies its SHA256
-# checksum, and extracts it into ~/.claude/skills/ and/or ~/.codex/skills/.
+# checksum, installs a stable CLI entrypoint, and optionally extracts the skill
+# into ~/.claude/skills/ and/or ~/.codex/skills/.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/rennzhang/ai-dispatch/main/scripts/install-remote.sh | bash
 #
 # Environment variables:
-#   AI_DISPATCH_SKILL_TARGET  claude | codex | all  (default: all)
+#   AI_DISPATCH_SKILL_TARGET  claude | codex | all | none  (default: all)
 #   AI_DISPATCH_VERSION       release tag or "latest" (default: latest)
+#   AI_DISPATCH_LINK_DIR      directory for ai-dispatch PATH symlink, or "none"
+#                             (default: ~/.local/bin)
 
 REPO="rennzhang/ai-dispatch"
 VERSION="${AI_DISPATCH_VERSION:-latest}"
 TARGET="${AI_DISPATCH_SKILL_TARGET:-all}"
+LINK_DIR="${AI_DISPATCH_LINK_DIR:-$HOME/.local/bin}"
 
 # --- detect OS and ARCH -----------------------------------------------------
 
@@ -95,8 +99,50 @@ if [ ! -d "$src_dir" ]; then
   echo "ai-dispatch: unexpected tarball structure — $src_dir not found" >&2
   exit 1
 fi
+RELEASE_VERSION="$(tr -d '[:space:]' < "$src_dir/VERSION")"
+if [ -z "$RELEASE_VERSION" ] || [ "$RELEASE_VERSION" = "dev" ]; then
+  echo "ai-dispatch: invalid release VERSION in tarball: '$RELEASE_VERSION'" >&2
+  exit 1
+fi
 
 # --- install ----------------------------------------------------------------
+
+install_cli() {
+  local home_dir="${AI_DISPATCH_HOME:-$HOME/.ai-dispatch}"
+  local bin_dir="$home_dir/bin"
+  local versioned_bin="$bin_dir/ai-dispatch-go-${RELEASE_VERSION}-${OS}-${ARCH}"
+  local wrapper="$bin_dir/ai-dispatch"
+  local tmp_bin="$versioned_bin.tmp.$$"
+  local tmp_wrapper="$wrapper.tmp.$$"
+
+  echo "==> Installing CLI to $wrapper"
+  mkdir -p "$bin_dir"
+  cp "$src_dir/scripts/ai-dispatch-go" "$tmp_bin"
+  chmod +x "$tmp_bin"
+  mv "$tmp_bin" "$versioned_bin"
+  cat > "$tmp_wrapper" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+SOURCE="\${BASH_SOURCE[0]}"
+while [ -L "\$SOURCE" ]; do
+  DIR="\$(cd -P "\$(dirname "\$SOURCE")" && pwd)"
+  SOURCE="\$(readlink "\$SOURCE")"
+  [[ \$SOURCE != /* ]] && SOURCE="\$DIR/\$SOURCE"
+done
+HERE="\$(cd -P "\$(dirname "\$SOURCE")" && pwd)"
+exec "\$HERE/ai-dispatch-go-${RELEASE_VERSION}-${OS}-${ARCH}" "\$@"
+EOF
+  chmod +x "$tmp_wrapper"
+  mv "$tmp_wrapper" "$wrapper"
+  installed_bins+=("$wrapper")
+
+  if [ "$LINK_DIR" != "none" ]; then
+    mkdir -p "$LINK_DIR"
+    ln -sfn "$wrapper" "$LINK_DIR/ai-dispatch"
+    echo "    PATH link: $LINK_DIR/ai-dispatch"
+  fi
+}
 
 install_to() {
   local skill_root="$1"
@@ -123,6 +169,8 @@ install_to() {
   installed_bins+=("$dest/scripts/ai-dispatch")
 }
 
+install_cli
+
 case "$TARGET" in
   all)
     install_to "$HOME/.claude/skills"
@@ -134,8 +182,10 @@ case "$TARGET" in
   codex)
     install_to "$HOME/.codex/skills"
     ;;
+  none)
+    ;;
   *)
-    echo "ai-dispatch: invalid AI_DISPATCH_SKILL_TARGET='$TARGET' (expected claude, codex, or all)" >&2
+    echo "ai-dispatch: invalid AI_DISPATCH_SKILL_TARGET='$TARGET' (expected claude, codex, all, or none)" >&2
     exit 1
     ;;
 esac
@@ -148,10 +198,15 @@ verify_home="$tmpdir/verify-home"
 for bin in "${installed_bins[@]}"; do
   AI_DISPATCH_HOME="$verify_home" "$bin" doctor --format json >/dev/null
 done
-echo "    verified ${#installed_bins[@]} skill install(s)"
+echo "    verified ${#installed_bins[@]} install entrypoint(s)"
 echo ""
 
 echo "Done. ai-dispatch installed successfully."
+echo ""
+echo "CLI: ${AI_DISPATCH_HOME:-$HOME/.ai-dispatch}/bin/ai-dispatch"
+if [ "$LINK_DIR" != "none" ]; then
+  echo "PATH link: $LINK_DIR/ai-dispatch"
+fi
 echo ""
 echo "On first send/resume, ~/.ai-dispatch/ will be auto-initialized"
 echo "with config and preferences. Run 'ai-dispatch providers scan' when needed."

@@ -16,6 +16,25 @@ ai-dispatch 是本地运行的薄 runtime：它只负责安装入口、模型短
 
 ## 安装
 
+安装 CLI，并同时安装给 Claude Code 和 Codex：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rennzhang/ai-dispatch/main/scripts/install-remote.sh | bash
+```
+
+安装后可以直接调用：
+
+```bash
+ai-dispatch doctor
+```
+
+只安装 CLI：
+
+```bash
+AI_DISPATCH_SKILL_TARGET=none \
+  curl -fsSL https://raw.githubusercontent.com/rennzhang/ai-dispatch/main/scripts/install-remote.sh | bash
+```
+
 安装给 Claude Code：
 
 ```bash
@@ -34,13 +53,9 @@ npx skills add rennzhang/ai-dispatch -g --agent codex
 npx skills add rennzhang/ai-dispatch -g --all
 ```
 
-不用 `npx` 也可以：
+`npx skills add` 只安装 skill；skill 会按需准备 runtime。需要人或脚本直接调用 CLI 时，用上面的 curl 安装。
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/rennzhang/ai-dispatch/main/scripts/install-remote.sh | bash
-```
-
-安装后，在 Claude 或 Codex 里直接这样说就能用。
+安装后，在终端、Claude 或 Codex 里都可以直接用。
 
 ## 直接复制这些提示词
 

@@ -2,7 +2,7 @@
 
 ## 配置初始化
 
-wrapper 负责准备 CLI 二进制；Go CLI 负责 `~/.ai-dispatch/` 运行态。
+`ai-dispatch` CLI 负责执行命令；skill wrapper 只是 Agent 调用入口，可以按需准备同一个 CLI runtime。Go CLI 负责 `~/.ai-dispatch/` 运行态。
 
 首次 `send`/`resume` 时，Go CLI 只确保 `config.json` 和 `preferences.md` 存在，然后继续执行原命令。这个路径不探测 provider。
 
@@ -102,7 +102,7 @@ ai-dispatch providers scan --refresh
   bin/
 ```
 
-`bin/` 只保存 wrapper 按 `VERSION` 下载的 release binary 缓存；wrapper 本身位于 skill 目录的 `scripts/` 下。
+`bin/` 保存稳定 CLI 入口 `ai-dispatch` 和按版本缓存的 release binary。skill wrapper 可以调用自己的本地 binary，也可以按 `VERSION` 下载同一套 release binary。
 
 ## 真实 provider 执行
 
