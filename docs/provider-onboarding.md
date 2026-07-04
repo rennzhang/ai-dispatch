@@ -411,6 +411,8 @@ dispatch 会在这些 failure class 下尝试下一个候选：
 
 ```bash
 AI_DISPATCH_GO_PROVIDER_EXECUTION=off go test ./...
+go vet ./...
+git diff --check
 scripts/go_active_caller_check.sh
 ```
 

@@ -12,7 +12,16 @@ Run before sending changes:
 
 ```bash
 AI_DISPATCH_GO_PROVIDER_EXECUTION=off go test ./...
+go vet ./...
+git diff --check
 scripts/go_active_caller_check.sh
 ```
 
 Real provider smoke is required for provider behavior changes.
+
+Installer or release changes also need:
+
+```bash
+bash -n scripts/install-remote.sh scripts/release.sh skills/ai-dispatch/scripts/ai-dispatch
+scripts/release.sh
+```

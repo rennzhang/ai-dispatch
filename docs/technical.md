@@ -202,6 +202,8 @@ AI_DISPATCH_SMOKE_AGY=on scripts/go_agy_stress.sh
 
 ## 发版
 
+先更新 `skills/ai-dispatch/VERSION`，再本地构建验证：
+
 ```bash
 scripts/release.sh vX.Y.Z
 ```
@@ -220,6 +222,16 @@ ai-dispatch-<os>-<arch>/
 ```
 
 同时生成 `SHA256SUMS`。GitHub Release 上传四个平台包：darwin/linux × amd64/arm64。
+
+正式发布由 tag 触发 GitHub Actions：
+
+```bash
+git tag vX.Y.Z
+git push origin main
+git push origin vX.Y.Z
+```
+
+发版后用 release 页面或 `gh release view vX.Y.Z` 确认四个平台包和 `SHA256SUMS` 都已上传。
 
 ## Provider 扩展
 

@@ -5,11 +5,15 @@
 ## Public Entry
 
 ```bash
-~/.claude/skills/ai-dispatch/scripts/ai-dispatch send <target> "prompt" --json-result --stream-progress
+ai-dispatch send <target> "prompt" --json-result --stream-progress
 ```
 
-The installed skill entry is a light wrapper. It downloads the release binary
-matching `skills/ai-dispatch/VERSION` into the local runtime cache when needed.
+The stable installed CLI lives at `~/.ai-dispatch/bin/ai-dispatch` and is usually
+linked as `ai-dispatch` from `~/.local/bin`.
+
+Installed skill entries are light Agent-facing wrappers. They can use their
+bundled release binary or download the binary matching their `VERSION` into the
+same local runtime cache when needed.
 
 Development entry:
 
@@ -54,6 +58,7 @@ Default state lives under `~/.ai-dispatch`:
 ```text
 config.json
 preferences.md
+bin/ai-dispatch
 bin/ai-dispatch-go-<version>-<platform>
 runs/
 logs/
@@ -70,6 +75,8 @@ logs/
 
 ```bash
 AI_DISPATCH_GO_PROVIDER_EXECUTION=off go test ./...
+go vet ./...
+git diff --check
 scripts/go_active_caller_check.sh
 scripts/release.sh
 scripts/go_provider_smoke.sh
