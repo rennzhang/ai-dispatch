@@ -52,6 +52,14 @@ tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 installed_bins=()
 
+curl_download() {
+  curl -fsSL \
+    --retry 3 \
+    --retry-delay 1 \
+    --retry-connrefused \
+    "$1" -o "$2"
+}
+
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | awk '{print $1}'
@@ -64,7 +72,7 @@ sha256_file() {
 }
 
 echo "==> Downloading ai-dispatch ${OS}/${ARCH} (${VERSION})..."
-if ! curl -fsSL "$TARBALL_URL" -o "$tmpdir/$TARBALL"; then
+if ! curl_download "$TARBALL_URL" "$tmpdir/$TARBALL"; then
   echo "ai-dispatch: failed to download $TARBALL_URL" >&2
   echo "Check your network connection or specify AI_DISPATCH_VERSION." >&2
   exit 1
@@ -73,7 +81,7 @@ fi
 # --- verify checksum --------------------------------------------------------
 
 echo "==> Verifying checksum..."
-if ! curl -fsSL "$CHECKSUMS_URL" -o "$tmpdir/SHA256SUMS"; then
+if ! curl_download "$CHECKSUMS_URL" "$tmpdir/SHA256SUMS"; then
   echo "ai-dispatch: SHA256SUMS not found at $CHECKSUMS_URL" >&2
   exit 1
 fi
