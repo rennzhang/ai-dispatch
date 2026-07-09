@@ -37,6 +37,8 @@ var allowedEnvPrefixes = []string{
 	"OPENCODE_",
 	"GOOGLE_",
 	"GEMINI_",
+	"GROK_",
+	"XAI_",
 }
 
 // SanitizedEnv returns the default environment for provider subprocesses. It

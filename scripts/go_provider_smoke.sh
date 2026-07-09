@@ -54,3 +54,11 @@ if [[ "${AI_DISPATCH_SMOKE_AGY:-off}" == "on" ]]; then
 else
   echo "[provider-smoke] antigravity agy deferred; set AI_DISPATCH_SMOKE_AGY=on when agy auth is active."
 fi
+
+if [[ "${AI_DISPATCH_SMOKE_GROK:-off}" == "on" ]]; then
+  grok_target="${AI_DISPATCH_SMOKE_GROK_TARGET:-grok}"
+  run_smoke "grok ${grok_target}" \
+    go run ./cmd/ai-dispatch send "$grok_target" "Reply exactly: OK" --json-result --timeout 120 --activity-timeout 60
+else
+  echo "[provider-smoke] grok deferred; set AI_DISPATCH_SMOKE_GROK=on when Grok CLI auth is active."
+fi

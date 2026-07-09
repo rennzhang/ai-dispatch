@@ -38,6 +38,13 @@ func Resolve(rawTarget string, explicitModel string) (DispatchTarget, error) {
 		return DispatchTarget{}, fmt.Errorf("target is required")
 	}
 	normalized := strings.ToLower(target)
+	if model == "" {
+		if configured, ok, err := lookupConfiguredModelTarget(target); err != nil {
+			return DispatchTarget{}, err
+		} else if ok {
+			return configured, nil
+		}
+	}
 	switch normalized {
 	case "codex":
 		if model == "" {
@@ -54,6 +61,15 @@ func Resolve(rawTarget string, explicitModel string) (DispatchTarget, error) {
 		return providerTarget(target, "claude", model)
 	case "antigravity":
 		return providerTarget(target, "antigravity", model)
+	case "grok":
+		if model == "" {
+			var err error
+			model, err = defaultProviderModel("grok")
+			if err != nil {
+				return DispatchTarget{}, err
+			}
+		}
+		return providerTarget(target, "grok", model)
 	case "gemini":
 		if model == "" {
 			var err error
@@ -66,11 +82,6 @@ func Resolve(rawTarget string, explicitModel string) (DispatchTarget, error) {
 	}
 	if model != "" {
 		return DispatchTarget{}, fmt.Errorf("cannot combine explicit model with model target")
-	}
-	if target, ok, err := lookupConfiguredModelTarget(target); err != nil {
-		return DispatchTarget{}, err
-	} else if ok {
-		return target, nil
 	}
 	if match, ok, err := lookupRegistryMatch(target); err != nil {
 		return DispatchTarget{}, err
@@ -328,6 +339,7 @@ func defaultProviderModel(provider string) (string, error) {
 	key := map[string]string{
 		"codex":       "gpt5.5",
 		"antigravity": "gemini-flash",
+		"grok":        "grok4.5",
 	}[provider]
 	if key == "" {
 		return "", nil
@@ -428,7 +440,7 @@ func ConfigModelTargets() []string {
 func SupportedTargets() []string {
 	seen := map[string]bool{}
 	targets := []string{}
-	for _, target := range append([]string{"codex", "opencode", "claude", "antigravity", "gemini", "gemini-flash", "gemini-pro"}, RegistryTargets()...) {
+	for _, target := range append([]string{"codex", "opencode", "claude", "antigravity", "gemini", "gemini-flash", "gemini-pro", "grok"}, RegistryTargets()...) {
 		if target == "" || seen[target] {
 			continue
 		}
@@ -471,7 +483,7 @@ func entryModelForProvider(entry registryEntry, provider string) string {
 
 func implementedProvider(provider string) bool {
 	switch provider {
-	case "codex", "opencode", "claude", "antigravity":
+	case "codex", "opencode", "claude", "antigravity", "grok":
 		return true
 	default:
 		return false

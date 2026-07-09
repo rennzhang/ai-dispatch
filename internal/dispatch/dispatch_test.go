@@ -45,6 +45,22 @@ func TestOpenCodeMissingBinaryIsConfigFailure(t *testing.T) {
 	}
 }
 
+func TestGrokMissingBinaryIsConfigFailure(t *testing.T) {
+	t.Setenv("AI_DISPATCH_GO_PROVIDER_EXECUTION", "on")
+	t.Setenv("AI_DISPATCH_GROK_BIN", "")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	result := Execute(contract.DispatchRequest{
+		Command: "send",
+		Target:  "grok",
+		Prompt:  "hello",
+	})
+	if result.OK || result.ProviderUsed != "grok" || result.FailureClass == nil || *result.FailureClass != contract.FailureConfig {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
 func TestExecuteRejectsUnsupportedTarget(t *testing.T) {
 	t.Setenv("AI_DISPATCH_CONFIG", filepath.Join(t.TempDir(), "missing-config.json"))
 	result := Execute(contract.DispatchRequest{
@@ -91,6 +107,19 @@ func TestGeminiRoutesToAntigravityProvider(t *testing.T) {
 		Prompt:  "hello",
 	})
 	if result.Status != contract.StatusDisabled || result.ProviderUsed != "antigravity" || result.RequestedTarget != "gemini" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestGrokRoutesToGrokProvider(t *testing.T) {
+	t.Setenv("AI_DISPATCH_GO_PROVIDER_EXECUTION", "")
+	t.Setenv("AI_DISPATCH_CONFIG", filepath.Join(t.TempDir(), "missing-config.json"))
+	result := Execute(contract.DispatchRequest{
+		Command: "send",
+		Target:  "grok",
+		Prompt:  "hello",
+	})
+	if result.Status != contract.StatusDisabled || result.ProviderUsed != "grok" || result.ModelUsed != "grok-4.5" {
 		t.Fatalf("result=%+v", result)
 	}
 }
@@ -281,6 +310,44 @@ func TestExecuteFallsBackAcrossConfiguredCandidates(t *testing.T) {
 		t.Fatalf("degrade fields missing: %+v", result)
 	}
 	if len(result.RouteSteps) != 2 || result.RouteSteps[0].Status == contract.StatusSuccess || result.RouteSteps[1].Status != contract.StatusSuccess {
+		t.Fatalf("route steps=%+v", result.RouteSteps)
+	}
+}
+
+func TestGrokConfiguredRouteFallsBackToOpenCode(t *testing.T) {
+	home := t.TempDir()
+	binDir := t.TempDir()
+	t.Setenv("AI_DISPATCH_HOME", home)
+	t.Setenv("AI_DISPATCH_CONFIG", filepath.Join(home, "config.json"))
+	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	t.Setenv("AI_DISPATCH_GO_PROVIDER_EXECUTION", "on")
+	t.Setenv("AI_DISPATCH_GROK_BIN", filepath.Join(t.TempDir(), "missing-grok"))
+	t.Setenv("PATH", binDir)
+	writeConfig(t, filepath.Join(home, "config.json"), `{
+  "version": 1,
+  "claude_transport": "print",
+  "models": {
+    "grok": [
+      { "provider": "grok", "model": "grok-4.5" },
+      { "provider": "opencode", "model": "openrouter/x-ai/grok-4.5" }
+    ]
+  },
+  "providers": {}
+}`)
+	writeFakeOpenCode(t, filepath.Join(binDir, "opencode"))
+
+	result := Execute(contract.DispatchRequest{
+		Command: "send",
+		Target:  "grok",
+		Prompt:  "hello",
+	})
+	if !result.OK || result.ProviderUsed != "opencode" || result.ModelUsed != "openrouter/x-ai/grok-4.5" {
+		t.Fatalf("result=%+v", result)
+	}
+	if !result.Degraded || !strings.Contains(result.DegradeReason, "grok:grok-4.5") {
+		t.Fatalf("degrade fields missing: %+v", result)
+	}
+	if len(result.RouteSteps) != 2 || result.RouteSteps[0].Provider != "grok" || result.RouteSteps[1].Provider != "opencode" {
 		t.Fatalf("route steps=%+v", result.RouteSteps)
 	}
 }

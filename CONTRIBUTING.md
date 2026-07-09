@@ -18,6 +18,17 @@ scripts/go_active_caller_check.sh
 ```
 
 Real provider smoke is required for provider behavior changes.
+Provider changes should also run the reusable provider acceptance harness. See
+`docs/provider-acceptance.md` for the full contract.
+
+```bash
+AI_DISPATCH_ACCEPTANCE_TARGET=<target> \
+AI_DISPATCH_ACCEPTANCE_PROVIDER=<provider> \
+AI_DISPATCH_ACCEPTANCE_MODEL=<model> \
+scripts/go_provider_acceptance.sh
+
+scripts/go_grok_stress.sh
+```
 
 Installer or release changes also need:
 

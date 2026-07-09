@@ -352,6 +352,58 @@ func TestModelsResolveJSON(t *testing.T) {
 	}
 }
 
+func TestModelsResolveGrokJSON(t *testing.T) {
+	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("AI_DISPATCH_HOME", home)
+	t.Setenv("AI_DISPATCH_CONFIG", filepath.Join(home, "config.json"))
+	writeCLIConfig(t, filepath.Join(home, "config.json"), `{
+  "version": 1,
+  "claude_transport": "print",
+  "models": {
+    "grok": [
+      { "provider": "grok", "model": "grok-4.5" },
+      { "provider": "opencode", "model": "openrouter/x-ai/grok-4.5" }
+    ]
+  },
+  "providers": {}
+}`)
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"models", "resolve", "grok"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["Provider"] != "grok" && payload["provider"] != "grok" {
+		t.Fatalf("payload=%v", payload)
+	}
+	candidates, _ := payload["candidates"].([]any)
+	if len(candidates) != 2 {
+		t.Fatalf("expected configured grok candidate chain, payload=%v", payload)
+	}
+}
+
+func TestProvidersScanTextIncludesGrok(t *testing.T) {
+	home := t.TempDir()
+	bin := filepath.Join(t.TempDir(), "grok")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho 'grok 0.2.93'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AI_DISPATCH_HOME", home)
+	t.Setenv("AI_DISPATCH_GROK_BIN", bin)
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"providers", "scan"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "grok: available (grok 0.2.93)") {
+		t.Fatalf("stdout=%s", stdout.String())
+	}
+}
+
 func TestModelsListsRegistryAliases(t *testing.T) {
 	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
 	home := t.TempDir()
@@ -488,6 +540,21 @@ func TestInvalidProviderOptFails(t *testing.T) {
 	_, _, err := parseSend("send", []string{"gpt5.5", "hello", "--provider-opt", "claude.transprot=pty"}, &stderr)
 	if err == nil || !strings.Contains(err.Error(), "unsupported provider option") {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestGrokProviderOptsParse(t *testing.T) {
+	var stderr bytes.Buffer
+	req, _, err := parseSend("send", []string{
+		"grok", "hello",
+		"--provider-opt", "grok.max-turns=1",
+		"--provider-opt", "grok.web-search=off",
+	}, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.ProviderOpts["grok"]["max-turns"] != "1" || req.ProviderOpts["grok"]["web-search"] != "off" {
+		t.Fatalf("provider opts=%v", req.ProviderOpts)
 	}
 }
 

@@ -133,6 +133,8 @@ ai-dispatch models resolve opus --format json
 > provider 推断
 ```
 
+`config.json models` 会覆盖同名内置短名；这是用户主动维护本机候选池的入口。需要强制 provider 语义时，使用 provider 名加显式 `--model`。
+
 `preferences.md` 只决定“某场景倾向选哪个短名”。`config.json models` 才是用户已经确认并主动加入的本机模型候选池。
 
 ## Provider 扫描
@@ -145,6 +147,43 @@ ai-dispatch providers scan --refresh
 ```
 
 扫描只更新 `~/.ai-dispatch/config.json` 的 `providers` 字段。它证明 provider CLI 看起来存在、能返回版本；不证明订阅、额度、地区封锁或 OpenRouter 单模型 endpoint 可用。
+
+## Grok provider opts
+
+Grok 的推荐入口是 `config.json models` 里的 `grok` 候选链：第一候选走本机 Grok Build CLI，后续候选可以走 OpenCode/OpenRouter 兜底。
+
+```bash
+ai-dispatch send grok "Reply exactly: OK" --json-result
+ai-dispatch send grok-fast "Reply exactly: OK" --json-result
+```
+
+推荐配置：
+
+```json
+{
+  "models": {
+    "grok": [
+      { "provider": "grok", "model": "grok-4.5" },
+      { "provider": "opencode", "model": "openrouter/x-ai/grok-4.5" }
+    ]
+  }
+}
+```
+
+可选参数统一走 `--provider-opt`：
+
+```bash
+ai-dispatch send grok "Reply exactly: OK" \
+  --provider-opt grok.max-turns=1 \
+  --provider-opt grok.web-search=off \
+  --json-result
+```
+
+支持的 key：`grok.max-turns`、`grok.effort`、`grok.web-search=on|off`、`grok.subagents=on|off`、`grok.approval=always|default`。
+
+默认 `grok.approval=always` 会向 Grok CLI 传 `--always-approve`，用于非交互式 dispatch。处理不可信 prompt 或不希望自动批准工具/文件操作时，传 `--provider-opt grok.approval=default`。
+
+旧的 `grok-build-0.1` 不再作为直接 target。需要原生 Grok Build CLI 时用 `grok` 或 `grok-fast`；需要直接走 OpenRouter 时，用 `opencode --model openrouter/x-ai/grok-4.5`。
 
 ## Run history
 
@@ -198,7 +237,14 @@ scripts/go_active_caller_check.sh
 scripts/go_provider_smoke.sh
 AI_DISPATCH_SMOKE_CLAUDE=on scripts/go_provider_smoke.sh
 AI_DISPATCH_SMOKE_AGY=on scripts/go_agy_stress.sh
+AI_DISPATCH_ACCEPTANCE_TARGET=grok \
+  AI_DISPATCH_ACCEPTANCE_PROVIDER=grok \
+  AI_DISPATCH_ACCEPTANCE_MODEL=grok-4.5 \
+  scripts/go_provider_acceptance.sh
+scripts/go_grok_stress.sh
 ```
+
+新增或回归 provider 的完整验收合同见 [Provider Acceptance](provider-acceptance.md)。
 
 ## 发版
 
@@ -232,6 +278,8 @@ git push origin vX.Y.Z
 ```
 
 发版后用 release 页面或 `gh release view vX.Y.Z` 确认四个平台包和 `SHA256SUMS` 都已上传。
+
+公开用户可见变更记录维护在 [Changelog](../CHANGELOG.md)。发版前先补对应版本条目，再更新 `skills/ai-dispatch/VERSION`。
 
 ## Provider 扩展
 

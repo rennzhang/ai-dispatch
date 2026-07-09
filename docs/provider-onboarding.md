@@ -12,6 +12,7 @@ ai-dispatch 不关心某个外部 CLI 自己怎么设计。接入者需要自己
 - `claude`：`claude -p` 或 PTY driver
 - `opencode`：`opencode run`
 - `antigravity`：`agy --print`，通过内置 `__agy-driver` 包装
+- `grok`：`grok --output-format json`
 
 新 CLI，例如 Copilot CLI、Cursor CLI、Augment CLI、Kimi CLI，应该新增 provider adapter。不要把新 CLI 伪装成 `codex`、`opencode` 或其他已有 provider。
 
@@ -353,7 +354,7 @@ dispatch 会在这些 failure class 下尝试下一个候选：
 
 给 AI 的推荐执行顺序：
 
-1. 读本文和当前四个 provider adapter，选一个最接近的 adapter 作为参考。
+1. 读本文和当前 provider adapter，选一个最接近的 adapter 作为参考。
 2. 用本机真实 CLI 或官方文档确认新 CLI 的最小调用方式：
    - 一次性 prompt 怎么传。
    - model 怎么传。
@@ -451,6 +452,21 @@ AI_DISPATCH_GO_PROVIDER_EXECUTION=on \
 ```
 
 如果真实 CLI 受账号、订阅、地区或额度限制无法 smoke，PR 或提交说明里必须写清楚阻塞原因，并保留 fake binary 单元测试证据。
+
+新增或改动 provider 后，优先跑通用验收 harness。完整合同见 [Provider Acceptance](provider-acceptance.md)。
+
+```bash
+AI_DISPATCH_ACCEPTANCE_TARGET=<target> \
+AI_DISPATCH_ACCEPTANCE_PROVIDER=<provider> \
+AI_DISPATCH_ACCEPTANCE_MODEL=<model> \
+scripts/go_provider_acceptance.sh
+```
+
+如果 provider 有专门 wrapper，直接用 wrapper，避免每次手写变量。比如 Grok：
+
+```bash
+scripts/go_grok_stress.sh
+```
 
 ## PR 检查清单
 

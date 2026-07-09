@@ -130,6 +130,80 @@ func TestResolveGeminiProviderAlias(t *testing.T) {
 	}
 }
 
+func TestResolveGrokDefaultsToNativeModel(t *testing.T) {
+	isolateConfig(t)
+	target, err := Resolve("grok", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Provider != "grok" || target.Model != "grok-4.5" || target.Requested != "grok" {
+		t.Fatalf("target=%+v", target)
+	}
+}
+
+func TestResolveGrokUsesConfiguredCandidateChain(t *testing.T) {
+	writeConfig(t, `{
+  "version": 1,
+  "claude_transport": "print",
+  "models": {
+    "grok": [
+      { "provider": "grok", "model": "grok-4.5" },
+      { "provider": "opencode", "model": "openrouter/x-ai/grok-4.5" }
+    ]
+  },
+  "providers": {}
+}`)
+	target, err := Resolve("grok", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Provider != "grok" || target.Model != "grok-4.5" || target.Source != "config" || len(target.Candidates) != 2 {
+		t.Fatalf("target=%+v", target)
+	}
+	candidates := CandidateTargets(target)
+	if len(candidates) != 2 || candidates[1].Provider != "opencode" || candidates[1].Model != "openrouter/x-ai/grok-4.5" {
+		t.Fatalf("candidates=%+v", candidates)
+	}
+}
+
+func TestResolveGrokExplicitModelKeepsProviderSemantics(t *testing.T) {
+	writeConfig(t, `{
+  "version": 1,
+  "claude_transport": "print",
+  "models": {
+    "grok": [
+      { "provider": "opencode", "model": "openrouter/x-ai/grok-4.5" }
+    ]
+  },
+  "providers": {}
+}`)
+	target, err := Resolve("grok", "grok-4.5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Provider != "grok" || target.Model != "grok-4.5" || target.Source != "provider" || len(target.Candidates) != 0 {
+		t.Fatalf("target=%+v", target)
+	}
+}
+
+func TestResolveGrokRegistryAlias(t *testing.T) {
+	isolateConfig(t)
+	target, err := Resolve("grok-fast", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Provider != "grok" || target.Model != "grok-composer-2.5-fast" || target.Source != "registry" {
+		t.Fatalf("target=%+v", target)
+	}
+}
+
+func TestResolveOldGrokBuildTargetIsNotRetained(t *testing.T) {
+	isolateConfig(t)
+	if _, err := Resolve("grok-build-0.1", ""); err == nil {
+		t.Fatal("expected old direct grok-build route to be unsupported")
+	}
+}
+
 func TestResolveGeminiGoogleModel(t *testing.T) {
 	isolateConfig(t)
 	target, err := Resolve("google/gemini-3.1-pro-preview", "")
@@ -158,6 +232,33 @@ func TestResolveConfiguredModelOverridesBuiltin(t *testing.T) {
 	}
 	if target.Provider != "opencode" || target.Model != "openai/gpt-5.5" || target.Source != "config" {
 		t.Fatalf("target=%+v", target)
+	}
+}
+
+func TestResolveConfiguredModelCanOverrideProviderNameUnlessModelExplicit(t *testing.T) {
+	writeConfig(t, `{
+  "version": 1,
+  "claude_transport": "print",
+  "models": {
+    "codex": [
+      { "provider": "opencode", "model": "openai/gpt-5.5" }
+    ]
+  },
+  "providers": {}
+}`)
+	target, err := Resolve("codex", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Provider != "opencode" || target.Model != "openai/gpt-5.5" || target.Source != "config" {
+		t.Fatalf("target=%+v", target)
+	}
+	explicit, err := Resolve("codex", "gpt-5.5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if explicit.Provider != "codex" || explicit.Model != "gpt-5.5" || explicit.Source != "provider" {
+		t.Fatalf("explicit=%+v", explicit)
 	}
 }
 
@@ -240,7 +341,7 @@ func TestSupportedTargetsIncludesConfigModelsAndBuiltins(t *testing.T) {
   "providers": {}
 }`)
 	targets := SupportedTargets()
-	for _, target := range []string{"mimo-pro", "mimo-openrouter-pro", "mimo-opencode-free", "gemini-pro"} {
+	for _, target := range []string{"mimo-pro", "mimo-openrouter-pro", "mimo-opencode-free", "gemini-pro", "grok", "grok-fast"} {
 		if !contains(targets, target) {
 			t.Fatalf("missing %q in targets=%v", target, targets)
 		}

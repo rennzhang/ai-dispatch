@@ -42,6 +42,15 @@ func Classify(provider string, stdout string, stderr string, runError string) Fa
 		"not available for your account",
 	):
 		class = contract.FailureConfig
+	case strings.EqualFold(provider, "Grok") && containsAny(combined,
+		"unknown model",
+		"invalid model",
+		"model not found",
+		"model does not exist",
+		"not available for your account",
+		"do not have access to this model",
+	):
+		class = contract.FailureConfig
 	case containsAny(combined, "no such host", "network is unreachable", "connection refused", "connection reset", "tls handshake", "temporary failure", "timeout awaiting response"):
 		class = contract.FailureNetwork
 	case containsAny(combined, "executable file not found", "command not found", "no such file or directory"):

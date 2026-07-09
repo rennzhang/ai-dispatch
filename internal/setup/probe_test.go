@@ -70,3 +70,18 @@ func TestExplicitBinaryOverrideDoesNotFallback(t *testing.T) {
 		t.Fatalf("unexpected error: %q", msg)
 	}
 }
+
+func TestProbeOneKnowsGrok(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "grok")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho 'grok 0.2.93'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AI_DISPATCH_GROK_BIN", bin)
+	status, ok := ProbeOne("grok", false)
+	if !ok {
+		t.Fatal("grok provider not registered")
+	}
+	if !status.Available || status.Version != "grok 0.2.93" {
+		t.Fatalf("status=%+v", status)
+	}
+}

@@ -275,7 +275,7 @@ func printSetupSummary(stderr io.Writer, s *setup.Summary) {
 		return
 	}
 	fmt.Fprintln(stderr, "  Provider 探测:")
-	for _, name := range []string{"claude", "codex", "opencode", "antigravity"} {
+	for _, name := range []string{"claude", "codex", "opencode", "antigravity", "grok"} {
 		ps, ok := s.Providers[name]
 		if !ok {
 			continue
@@ -591,6 +591,13 @@ func validProviderOpt(provider string, key string) bool {
 		return key == "format"
 	case "antigravity":
 		return key == "bin" || key == "root"
+	case "grok":
+		switch key {
+		case "approval", "max-turns", "effort", "web-search", "subagents":
+			return true
+		default:
+			return false
+		}
 	default:
 		return false
 	}

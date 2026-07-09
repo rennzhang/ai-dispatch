@@ -138,6 +138,9 @@ while IFS= read -r key; do
   if [[ "${AI_DISPATCH_SKIP_AGY:-}" == "on" && "$provider" == "antigravity" ]]; then
     continue
   fi
+  if [[ "${AI_DISPATCH_SKIP_GROK:-}" == "on" && "$provider" == "grok" ]]; then
+    continue
+  fi
   marker="OK_${key//[^A-Za-z0-9]/_}"
   run_case "provider_${provider}_${key}_EXPECT_${marker}" \
     bin/ai-dispatch send "$key" "Reply exactly: ${marker}" \

@@ -52,7 +52,7 @@ func providersScan(argv []string, stdout io.Writer, stderr io.Writer) int {
 	if *format == "json" {
 		return writeJSON(stdout, payload, 0)
 	}
-	for _, name := range []string{"claude", "codex", "opencode", "antigravity"} {
+	for _, name := range []string{"claude", "codex", "opencode", "antigravity", "grok"} {
 		ps := cfg.Providers[name]
 		status := "unavailable"
 		if ps.Available {

@@ -35,7 +35,8 @@ ai-dispatch init --force
   "providers": {
     "claude": { "available": true, "version": "2.1.2" },
     "codex": { "available": true, "version": "0.142.0" },
-    "opencode": { "available": true, "version": "1.17.3", "catalog_model_count": 42 }
+    "opencode": { "available": true, "version": "1.17.3", "catalog_model_count": 42 },
+    "grok": { "available": true, "version": "grok 0.2.93" }
   }
 }
 ```
@@ -46,7 +47,7 @@ ai-dispatch init --force
 |---|---|
 | `claude_transport` | Claude 调用方式：`print`、`pty`、`auto`、`disabled` |
 | `models` | 用户已经确认并主动加入的本机模型候选池；key 是短名，value 是按顺序尝试的候选数组 |
-| `models.<name>[].provider` | 真实 provider：`codex`、`claude`、`opencode`、`antigravity` |
+| `models.<name>[].provider` | 真实 provider：`codex`、`claude`、`opencode`、`antigravity`、`grok` |
 | `models.<name>[].model` | 传给底层 provider CLI 的真实 model id |
 | `providers` | provider CLI 诊断摘要，由 `init` 或 `providers scan` 更新 |
 | `providers.<name>.available` | provider CLI 是否看起来可执行 |
@@ -62,6 +63,32 @@ ai-dispatch config show
 ```
 
 `providers.opencode.catalog_model_count` 只是 catalog 数量摘要，不代表这些模型都经过用户确认或真实可调用。
+
+## Grok provider opts
+
+Grok 的推荐入口是 `config.json models` 里的 `grok` 候选链：第一候选走本机 Grok Build CLI，后续候选可以走 OpenCode/OpenRouter 兜底。
+
+```json
+{
+  "models": {
+    "grok": [
+      { "provider": "grok", "model": "grok-4.5" },
+      { "provider": "opencode", "model": "openrouter/x-ai/grok-4.5" }
+    ]
+  }
+}
+```
+
+```bash
+ai-dispatch send grok "Reply exactly: OK" \
+  --provider-opt grok.max-turns=1 \
+  --provider-opt grok.web-search=off \
+  --json-result
+```
+
+支持的 key：`grok.max-turns`、`grok.effort`、`grok.web-search=on|off`、`grok.subagents=on|off`、`grok.approval=always|default`。
+
+默认 `grok.approval=always` 会向 Grok CLI 传 `--always-approve`，用于非交互式 dispatch。处理不可信 prompt 或不希望自动批准工具/文件操作时，传 `--provider-opt grok.approval=default`。
 
 ## 模型解析顺序
 

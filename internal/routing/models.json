@@ -96,6 +96,57 @@
       ]
     },
     {
+      "key": "grok4.5",
+      "label": "grok4.5",
+      "actualModelId": "grok-4.5",
+      "provider": "grok",
+      "providerTitle": "Grok",
+      "shortLabel": "grok4.5",
+      "fullLabel": "xAI Grok 4.5 via Grok Build CLI",
+      "dispatchRunner": "grok",
+      "dispatchModel": "grok-4.5",
+      "stableTier": "stable",
+      "capabilities": ["agentic-coding", "software-engineering", "fast-analysis", "code-understanding"],
+      "recommendedFor": ["coding-agent-fast-path", "engineering-analysis", "parallel-exploration"],
+      "notes": [
+        "Native Grok Build CLI route; uses the local grok authentication and session store.",
+        "Good fit for fast coding-agent execution, quick second opinions, and small to medium implementation tasks."
+      ],
+      "aliases": [
+        "grok",
+        "grok-build",
+        "grok-cli",
+        "grok-native",
+        "grok4",
+        "grok45",
+        "grok-4.5"
+      ]
+    },
+    {
+      "key": "grok-composer-fast",
+      "label": "grok-composer-fast",
+      "actualModelId": "grok-composer-2.5-fast",
+      "provider": "grok",
+      "providerTitle": "Grok",
+      "shortLabel": "grok-composer-fast",
+      "fullLabel": "xAI Grok Composer 2.5 Fast via Grok Build CLI",
+      "dispatchRunner": "grok",
+      "dispatchModel": "grok-composer-2.5-fast",
+      "stableTier": "fast",
+      "capabilities": ["fast-analysis", "light-agent", "brainstorming"],
+      "recommendedFor": ["quick-draft", "fast-analysis", "parallel-exploration"],
+      "notes": [
+        "Native Grok Build CLI fast model route; use when latency matters more than depth."
+      ],
+      "aliases": [
+        "grok-fast",
+        "grok-composer",
+        "composer",
+        "composer-fast",
+        "grok-composer-2.5-fast"
+      ]
+    },
+    {
       "key": "mimo-opencode-free",
       "label": "mimo-opencode-free",
       "actualModelId": "opencode/mimo-v2.5-free",
@@ -220,38 +271,6 @@
         "minimax-m27",
         "minimax/minimax-m2.7",
         "openrouter/minimax/minimax-m2.7"
-      ]
-    },
-    {
-      "key": "grok-build-0.1",
-      "label": "grok-build-0.1",
-      "actualModelId": "openrouter/x-ai/grok-build-0.1",
-      "provider": "opencode",
-      "providerTitle": "xAI",
-      "shortLabel": "grok-build-0.1",
-      "fullLabel": "xAI Grok Build 0.1",
-      "dispatchRunner": "opencode",
-      "dispatchModel": "openrouter/x-ai/grok-build-0.1",
-      "stableTier": "stable",
-      "capabilities": ["agentic-coding", "software-engineering", "code-understanding", "analysis", "fast-analysis", "brainstorming"],
-      "recommendedFor": ["coding-agent", "engineering-analysis", "code-understanding", "fast-analysis"],
-      "notes": [
-        "Fast coding model trained for agentic software engineering workflows.",
-        "Use as a stable engineering analysis option when a second coding-oriented perspective is useful."
-      ],
-      "aliases": [
-        "grok",
-        "grok-build",
-        "grok-build-0.1",
-        "grok-build-01",
-        "x-ai/grok-build-0.1",
-        "openrouter/x-ai/grok-build-0.1",
-        "grok-4.3",
-        "grok4",
-        "grok-4-fast",
-        "grok-fast",
-        "x-ai/grok-4.3",
-        "openrouter/x-ai/grok-4.3"
       ]
     },
     {
