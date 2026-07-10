@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.3.0
+
+- Add the `ai-dispatch` npm package, so the CLI can be installed with npm or run once through npx.
+- Add a generated Homebrew formula for the `rennzhang/tap` tap.
+- Keep GitHub Release binaries as the only executable source: the npm installer downloads the matching platform binary and verifies it against release SHA-256 checksums.
+- Add npm package tests and release-version checks; release assets now include standalone darwin/linux amd64/arm64 binaries for the npm installer.
+
 ## v0.2.0
 
 - Promote the Grok provider release to a minor version because it adds a first-class provider and reusable provider acceptance gate.

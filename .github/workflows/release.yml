@@ -17,18 +17,27 @@ jobs:
         with:
           go-version: "1.24"
           cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - name: Run tests
         run: |
           AI_DISPATCH_GO_PROVIDER_EXECUTION=off go test ./...
+      - name: Test npm package
+        working-directory: npm/ai-dispatch
+        run: |
+          npm test
+          npm pack --dry-run
       - name: Build tarballs
         run: |
           tag="${GITHUB_REF#refs/tags/}"
           scripts/release.sh "$tag"
+          scripts/check-homebrew-formula.sh
       - name: Create release and upload assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${GITHUB_REF#refs/tags/}"
-          gh release create "$tag" dist/*.tar.gz dist/SHA256SUMS \
+          gh release create "$tag" dist/*.tar.gz dist/*.bin dist/SHA256SUMS dist/ai-dispatch.rb \
             --title "$tag" \
             --generate-notes

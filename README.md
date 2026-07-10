@@ -16,7 +16,28 @@ ai-dispatch 是本地运行的薄 runtime：它只负责安装入口、模型短
 
 ## 安装
 
-安装 CLI，并同时安装给 Claude Code 和 Codex：
+有 Node.js 时，直接安装 CLI：
+
+```bash
+npm install -g ai-dispatch
+ai-dispatch doctor
+```
+
+一次性执行可以用：
+
+```bash
+npx --yes ai-dispatch doctor
+```
+
+npm 包会下载与包版本一致的 GitHub Release 原生二进制，并校验 SHA-256。它只安装 CLI；Claude Code 和 Codex skill 仍按下面方式安装。
+
+通过 Homebrew 安装：
+
+```bash
+brew install rennzhang/tap/ai-dispatch
+```
+
+没有 Node.js，或希望一次安装 CLI 和两个 skill 时：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/rennzhang/ai-dispatch/main/scripts/install-remote.sh | bash

@@ -1,0 +1,41 @@
+{
+  "name": "ai-dispatch",
+  "version": "0.3.0",
+  "description": "Install and run the ai-dispatch CLI from verified GitHub Release binaries.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rennzhang/ai-dispatch.git",
+    "directory": "npm/ai-dispatch"
+  },
+  "homepage": "https://github.com/rennzhang/ai-dispatch#readme",
+  "bugs": {
+    "url": "https://github.com/rennzhang/ai-dispatch/issues"
+  },
+  "bin": {
+    "ai-dispatch": "bin/ai-dispatch.js"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "scripts/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js",
+    "prepack": "node scripts/verify-package.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ]
+}

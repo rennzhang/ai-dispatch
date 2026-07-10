@@ -4,7 +4,29 @@
 
 ## 安装形态
 
-推荐通过 curl 安装 CLI，并按需安装 skill：
+有 Node.js 时，推荐通过 npm 安装 CLI：
+
+```bash
+npm install -g ai-dispatch
+```
+
+也可以不做全局安装：
+
+```bash
+npx --yes ai-dispatch doctor
+```
+
+npm 包不内置平台二进制。安装时它会下载与 npm 包版本对应的 GitHub Release `.bin` 资产，并按同一 release 的 `SHA256SUMS` 校验后才执行。当前支持 darwin/linux 的 amd64/arm64，要求 Node.js 18+。
+
+Homebrew 用户通过独立 tap 安装：
+
+```bash
+brew install rennzhang/tap/ai-dispatch
+```
+
+公式下载同一 GitHub Release 的平台 tarball，并使用生成时写入的 SHA-256。公式不是手工维护版本和 hash：`scripts/render-homebrew-formula.sh` 从 release `SHA256SUMS` 生成它。
+
+curl 仍可安装 CLI，并按需安装 skill：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/rennzhang/ai-dispatch/main/scripts/install-remote.sh | bash
@@ -25,7 +47,7 @@ npx skills add rennzhang/ai-dispatch -g --agent codex
 npx skills add rennzhang/ai-dispatch -g --all
 ```
 
-通过 curl 安装时，安装脚本会下载 release tarball，把稳定 CLI 写到 `~/.ai-dispatch/bin/ai-dispatch`，并把 `ai-dispatch` 链接到 `~/.local/bin/`。如果不想创建 PATH 链接，设置 `AI_DISPATCH_LINK_DIR=none`。
+通过 npm 安装时，npm 的 `ai-dispatch` 命令直接代理到包内已校验的 release binary；不写入 `~/.ai-dispatch/bin/`。通过 curl 安装时，安装脚本会下载 release tarball，把稳定 CLI 写到 `~/.ai-dispatch/bin/ai-dispatch`，并把 `ai-dispatch` 链接到 `~/.local/bin/`。如果不想创建 PATH 链接，设置 `AI_DISPATCH_LINK_DIR=none`。
 
 通过 `npx skills add` 安装时，skill 目录里只有轻量 wrapper。第一次执行 wrapper 时，它会按 `VERSION` 下载对应 GitHub Release tarball，并校验 checksum。
 
@@ -267,7 +289,7 @@ ai-dispatch-<os>-<arch>/
   scripts/ai-dispatch-go
 ```
 
-同时生成 `SHA256SUMS`。GitHub Release 上传四个平台包：darwin/linux × amd64/arm64。
+同时生成 `SHA256SUMS`。GitHub Release 上传四个平台的 skill tarball 和 npm 用的 standalone `.bin`：darwin/linux × amd64/arm64。
 
 正式发布由 tag 触发 GitHub Actions：
 
@@ -278,6 +300,18 @@ git push origin vX.Y.Z
 ```
 
 发版后用 release 页面或 `gh release view vX.Y.Z` 确认四个平台包和 `SHA256SUMS` 都已上传。
+
+GitHub Release 完成后，再发布同版本 npm 包和 Homebrew tap 公式：
+
+```bash
+cd npm/ai-dispatch
+npm test
+npm pack --dry-run
+cd ../..
+npm publish ./npm/ai-dispatch
+```
+
+`scripts/release.sh` 会拒绝 npm 包版本与 `skills/ai-dispatch/VERSION` 不一致的构建，并生成 `dist/ai-dispatch.rb`。将它复制到 `rennzhang/homebrew-tap` 的 `Formula/ai-dispatch.rb` 后提交推送。npm publish 与 tap 更新都保持人工显式执行，避免 tag 推送自动向外发布。
 
 公开用户可见变更记录维护在 [Changelog](../CHANGELOG.md)。发版前先补对应版本条目，再更新 `skills/ai-dispatch/VERSION`。
 

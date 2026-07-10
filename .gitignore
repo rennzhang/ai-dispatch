@@ -16,3 +16,4 @@ notify_result.json
 dist/
 build/
 coverage/
+npm/ai-dispatch/bin/native/

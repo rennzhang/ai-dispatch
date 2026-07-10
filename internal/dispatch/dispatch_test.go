@@ -32,6 +32,7 @@ func TestOpenCodeMissingBinaryIsConfigFailure(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	t.Setenv("AI_DISPATCH_OPENCODE_LOCK_PATH", filepath.Join(t.TempDir(), "opencode.lock"))
 	result := Execute(contract.DispatchRequest{
 		Command: "send",
 		Target:  "opencode",
@@ -283,6 +284,7 @@ func TestExecuteFallsBackAcrossConfiguredCandidates(t *testing.T) {
 	t.Setenv("AI_DISPATCH_HOME", home)
 	t.Setenv("AI_DISPATCH_CONFIG", filepath.Join(home, "config.json"))
 	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	t.Setenv("AI_DISPATCH_OPENCODE_LOCK_PATH", filepath.Join(t.TempDir(), "opencode.lock"))
 	t.Setenv("AI_DISPATCH_GO_PROVIDER_EXECUTION", "on")
 	t.Setenv("PATH", binDir)
 	writeConfig(t, filepath.Join(home, "config.json"), `{
@@ -320,6 +322,7 @@ func TestGrokConfiguredRouteFallsBackToOpenCode(t *testing.T) {
 	t.Setenv("AI_DISPATCH_HOME", home)
 	t.Setenv("AI_DISPATCH_CONFIG", filepath.Join(home, "config.json"))
 	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	t.Setenv("AI_DISPATCH_OPENCODE_LOCK_PATH", filepath.Join(t.TempDir(), "opencode.lock"))
 	t.Setenv("AI_DISPATCH_GO_PROVIDER_EXECUTION", "on")
 	t.Setenv("AI_DISPATCH_GROK_BIN", filepath.Join(t.TempDir(), "missing-grok"))
 	t.Setenv("PATH", binDir)

@@ -9,6 +9,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST="$ROOT/dist"
 SRC_SKILL="$ROOT/skills/ai-dispatch"
 VERSION_FILE="$SRC_SKILL/VERSION"
+NPM_PACKAGE="$ROOT/npm/ai-dispatch"
 
 if [ "${2:-}" != "" ]; then
   echo "Usage: scripts/release.sh [expected-version-tag]" >&2
@@ -28,6 +29,11 @@ if [ -n "$EXPECTED_VERSION" ] && [ "$VERSION" != "$EXPECTED_VERSION" ]; then
   echo "ai-dispatch: VERSION mismatch: skill VERSION is $VERSION, release tag is $EXPECTED_VERSION" >&2
   exit 1
 fi
+if ! command -v node >/dev/null 2>&1; then
+  echo "ai-dispatch: node is required to verify the npm package version" >&2
+  exit 1
+fi
+node "$NPM_PACKAGE/scripts/verify-package.js"
 
 PLATFORMS=(
   "darwin amd64"
@@ -78,6 +84,10 @@ for plat in "${PLATFORMS[@]}"; do
   )
   chmod +x "$bin"
 
+  # Keep a checksum-verified standalone binary for the npm installer.
+  cp "$bin" "$DIST/$pkgname.bin"
+  chmod +x "$DIST/$pkgname.bin"
+
   # Create tarball
   tar -C "$DIST" -czf "$DIST/$pkgname.tar.gz" "$pkgname"
   echo "    -> $DIST/$pkgname.tar.gz"
@@ -86,9 +96,10 @@ done
 echo ""
 echo "==> Generating SHA256SUMS"
 cd "$DIST"
-sha256_files *.tar.gz > SHA256SUMS
+sha256_files *.tar.gz *.bin > SHA256SUMS
 cd "$ROOT"
-ls -lh "$DIST"/*.tar.gz
+scripts/render-homebrew-formula.sh "$VERSION" "$DIST/ai-dispatch.rb"
+ls -lh "$DIST"/*.tar.gz "$DIST"/*.bin
 echo ""
 echo "Release packages built for $VERSION."
 echo ""
