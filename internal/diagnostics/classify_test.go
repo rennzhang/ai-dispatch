@@ -21,6 +21,13 @@ func TestClassifyQuotaFailure(t *testing.T) {
 	}
 }
 
+func TestClassifyGrokPaymentRequiredAsQuota(t *testing.T) {
+	got := Classify("Grok", "", "HTTP 402 Payment Required: usage balance exhausted", "")
+	if got.Status != contract.StatusQuota || got.Class != contract.FailureQuota {
+		t.Fatalf("got=%+v", got)
+	}
+}
+
 func TestClassifyCodexUsageLimitFromStdoutDespiteLoaderWarnings(t *testing.T) {
 	got := Classify(
 		"Codex",
@@ -88,6 +95,18 @@ func TestClassifyAntigravityEmptyOutputAsActionableConfig(t *testing.T) {
 	}
 	if got.Stderr != "agy completed without output; verify agy login and Chrome authorization before retrying" {
 		t.Fatalf("stderr=%q", got.Stderr)
+	}
+}
+
+func TestClassifyAntigravityRegionAndAccountFailuresAsConfig(t *testing.T) {
+	for _, message := range []string{
+		"Antigravity is not available in the current region",
+		"Antigravity account is not eligible for this model or service",
+	} {
+		got := Classify("Antigravity", "", message, "exit status 1")
+		if got.Status != contract.StatusError || got.Class != contract.FailureConfig {
+			t.Fatalf("message=%q got=%+v", message, got)
+		}
 	}
 }
 

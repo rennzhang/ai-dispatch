@@ -1,6 +1,7 @@
 package progress
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"io"
 	"strings"
@@ -9,20 +10,35 @@ import (
 	"github.com/rennzhang/ai-dispatch/internal/contract"
 )
 
+const (
+	maxProgressLineBytes  = 64 << 10
+	maxProgressChunkBytes = 64 << 10
+	maxSeenEventKeys      = 1024
+)
+
+const droppedProgressLineSummary = "progress line exceeded 65536 bytes and was dropped"
+
 type Emitter struct {
 	Provider string
 	Writer   io.Writer
 
-	mu       sync.Mutex
-	seen     map[string]bool
-	lineFeed LineFeed
+	mu sync.Mutex
+	// seenOrder is a fixed-size FIFO dedup window. Old keys may be emitted
+	// again after eviction, but unique provider events cannot grow memory.
+	seen       map[[sha256.Size]byte]struct{}
+	seenOrder  [][sha256.Size]byte
+	seenNext   int
+	stdoutMu   sync.Mutex
+	stdoutFeed LineFeed
+	stderrMu   sync.Mutex
+	stderrFeed LineFeed
 }
 
 func NewEmitter(provider string, writer io.Writer) *Emitter {
 	return &Emitter{
 		Provider: provider,
 		Writer:   writer,
-		seen:     map[string]bool{},
+		seen:     map[[sha256.Size]byte]struct{}{},
 	}
 }
 
@@ -36,12 +52,35 @@ func (e *Emitter) Emit(kind contract.ProgressKind, name string, summary string) 
 }
 
 func (e *Emitter) Feed(chunk []byte) {
+	e.FeedStdout(chunk)
+}
+
+func (e *Emitter) FeedStdout(chunk []byte) {
 	if e == nil || e.Writer == nil {
 		return
 	}
-	events := e.lineFeed.Feed(string(chunk), e.Provider)
-	for _, event := range events {
-		e.emit(event)
+	e.feedChunks(chunk, &e.stdoutMu, &e.stdoutFeed)
+}
+
+func (e *Emitter) FeedStderr(chunk []byte) {
+	if e == nil || e.Writer == nil {
+		return
+	}
+	e.feedChunks(chunk, &e.stderrMu, &e.stderrFeed)
+}
+
+func (e *Emitter) feedChunks(chunk []byte, streamMu *sync.Mutex, lineFeed *LineFeed) {
+	streamMu.Lock()
+	defer streamMu.Unlock()
+	for len(chunk) > 0 {
+		chunkSize := len(chunk)
+		if chunkSize > maxProgressChunkBytes {
+			chunkSize = maxProgressChunkBytes
+		}
+		for _, event := range lineFeed.Feed(string(chunk[:chunkSize]), e.Provider) {
+			e.emit(event)
+		}
+		chunk = chunk[chunkSize:]
 	}
 }
 
@@ -49,19 +88,32 @@ func (e *Emitter) Close() {
 	if e == nil || e.Writer == nil {
 		return
 	}
-	for _, event := range e.lineFeed.Close(e.Provider) {
+	e.stdoutMu.Lock()
+	stdoutEvents := e.stdoutFeed.Close(e.Provider)
+	e.stdoutMu.Unlock()
+	e.stderrMu.Lock()
+	stderrEvents := e.stderrFeed.Close(e.Provider)
+	e.stderrMu.Unlock()
+	for _, event := range append(stdoutEvents, stderrEvents...) {
 		e.emit(event)
 	}
 }
 
 func (e *Emitter) emit(event contract.ProgressEvent) {
-	key := string(event.Kind) + "\x00" + event.Name + "\x00" + event.Summary
+	key := progressEventKey(event)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.seen[key] {
+	if _, ok := e.seen[key]; ok {
 		return
 	}
-	e.seen[key] = true
+	if len(e.seenOrder) < maxSeenEventKeys {
+		e.seenOrder = append(e.seenOrder, key)
+	} else {
+		delete(e.seen, e.seenOrder[e.seenNext])
+		e.seenOrder[e.seenNext] = key
+		e.seenNext = (e.seenNext + 1) % maxSeenEventKeys
+	}
+	e.seen[key] = struct{}{}
 	data, err := json.Marshal(event)
 	if err != nil {
 		return
@@ -69,33 +121,80 @@ func (e *Emitter) emit(event contract.ProgressEvent) {
 	_, _ = e.Writer.Write(append(data, '\n'))
 }
 
+func progressEventKey(event contract.ProgressEvent) [sha256.Size]byte {
+	hash := sha256.New()
+	for _, value := range []string{
+		string(event.Kind), event.Name, event.Summary, event.Provider, event.SessionID, event.RunID,
+	} {
+		_, _ = io.WriteString(hash, value)
+		_, _ = hash.Write([]byte{0})
+	}
+	var key [sha256.Size]byte
+	copy(key[:], hash.Sum(nil))
+	return key
+}
+
 type LineFeed struct {
 	pending string
+	// discarding means the current line exceeded maxProgressLineBytes. The
+	// whole line is ignored through its newline; truncated JSON is never parsed.
+	discarding bool
 }
 
 func (l *LineFeed) Feed(chunk string, provider string) []contract.ProgressEvent {
-	text := l.pending + chunk
-	lines := strings.Split(text, "\n")
-	if !strings.HasSuffix(text, "\n") {
-		l.pending = lines[len(lines)-1]
-		lines = lines[:len(lines)-1]
-	} else {
-		l.pending = ""
-	}
 	events := []contract.ProgressEvent{}
-	for _, line := range lines {
-		events = append(events, eventsFromLine(line, provider)...)
+	for len(chunk) > 0 {
+		newline := strings.IndexByte(chunk, '\n')
+		if l.discarding {
+			if newline < 0 {
+				return events
+			}
+			l.discarding = false
+			chunk = chunk[newline+1:]
+			continue
+		}
+		if newline < 0 {
+			if len(l.pending)+len(chunk) > maxProgressLineBytes {
+				l.pending = ""
+				l.discarding = true
+				events = append(events, droppedProgressLineEvent(provider))
+			} else {
+				l.pending += chunk
+			}
+			return events
+		}
+		segment := chunk[:newline]
+		if len(l.pending)+len(segment) > maxProgressLineBytes {
+			l.pending = ""
+			events = append(events, droppedProgressLineEvent(provider))
+		} else {
+			line := l.pending + segment
+			l.pending = ""
+			events = append(events, eventsFromLine(line, provider)...)
+		}
+		chunk = chunk[newline+1:]
 	}
 	return events
 }
 
 func (l *LineFeed) Close(provider string) []contract.ProgressEvent {
+	if l.discarding {
+		l.pending = ""
+		l.discarding = false
+		return nil
+	}
 	if strings.TrimSpace(l.pending) == "" {
 		return nil
 	}
 	line := l.pending
 	l.pending = ""
 	return eventsFromLine(line, provider)
+}
+
+func droppedProgressLineEvent(provider string) contract.ProgressEvent {
+	event := contract.NewProgress(contract.ProgressWarning, "progress_line_dropped", droppedProgressLineSummary)
+	event.Provider = provider
+	return event
 }
 
 func eventsFromLine(line string, provider string) []contract.ProgressEvent {
@@ -135,16 +234,14 @@ func eventFromProgressPayload(payload map[string]any, provider string) contract.
 	if kind == "" {
 		kind = progressKind(firstString(payload, "name"))
 	}
+	// Provider output is data, not the dispatch control plane. Only dispatch may
+	// emit terminal done/error events after process execution has completed.
+	if kind == contract.ProgressDone || kind == contract.ProgressError {
+		kind = contract.ProgressTool
+	}
 	event := contract.NewProgress(kind, firstString(payload, "name"), firstString(payload, "summary"))
-	event.Provider = firstNonEmpty(firstString(payload, "provider"), provider)
+	event.Provider = provider
 	event.SessionID = firstString(payload, "session_id")
-	event.RunID = firstString(payload, "run_id")
-	if nextAction := firstString(payload, "next_action"); nextAction != "" {
-		event.NextAction = nextAction
-	}
-	if directive := firstString(payload, "directive"); directive != "" {
-		event.Directive = directive
-	}
 	return event
 }
 

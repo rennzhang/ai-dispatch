@@ -39,6 +39,15 @@ func renderFrontmatter(result contract.ProviderResult) string {
 	if result.DegradeReason != "" {
 		lines = append(lines, "  degrade_reason: "+quote(result.DegradeReason))
 	}
+	if result.RequestedEffort != "" {
+		lines = append(lines, "  requested_effort: "+quote(string(result.RequestedEffort)))
+	}
+	if result.AppliedEffort != "" {
+		lines = append(lines, "  applied_effort: "+quote(string(result.AppliedEffort)))
+	}
+	if result.EffortFallbackReason != "" {
+		lines = append(lines, "  effort_fallback_reason: "+quote(result.EffortFallbackReason))
+	}
 	if result.SessionID != "" {
 		lines = append(lines, "  session_id: "+quote(result.SessionID))
 	}

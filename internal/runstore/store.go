@@ -3,6 +3,7 @@ package runstore
 import (
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,6 +32,26 @@ type ListFilter struct {
 	FailureClass contract.FailureClass
 	Since        time.Time
 	Limit        int
+}
+
+type InvalidRecord struct {
+	RunID string `json:"run_id"`
+	Error string `json:"error"`
+}
+
+type InvalidRecordsError struct {
+	Records []InvalidRecord
+}
+
+func (e *InvalidRecordsError) Error() string {
+	if e == nil || len(e.Records) == 0 {
+		return "invalid run record"
+	}
+	runIDs := make([]string, 0, len(e.Records))
+	for _, record := range e.Records {
+		runIDs = append(runIDs, record.RunID)
+	}
+	return "invalid run record(s): " + strings.Join(runIDs, ", ")
 }
 
 func DefaultRoot() string {
@@ -63,18 +84,20 @@ func WriteResultWithTask(root string, runID string, taskName string, result cont
 	if !validRunID(runID) {
 		return fmt.Errorf("invalid run id")
 	}
-	dir := filepath.Join(root, runID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(root, 0o755); err != nil {
 		return err
 	}
-	resultPath := filepath.Join(dir, "result.json")
-	data, err := json.MarshalIndent(result, "", "  ")
+	dir := filepath.Join(root, runID)
+	if _, err := os.Lstat(dir); err == nil {
+		return fmt.Errorf("run %q already exists", runID)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	stagingDir, err := os.MkdirTemp(root, "."+runID+".tmp-")
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(resultPath, append(data, '\n'), 0o600); err != nil {
-		return err
-	}
+	defer os.RemoveAll(stagingDir)
 	record := RunRecord{
 		RunID:     runID,
 		CreatedAt: time.Now().Format(time.RFC3339),
@@ -88,7 +111,13 @@ func WriteResultWithTask(root string, runID string, taskName string, result cont
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "run.json"), append(meta, '\n'), 0o600)
+	if err := os.WriteFile(filepath.Join(stagingDir, "run.json"), append(meta, '\n'), 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(stagingDir, dir); err != nil {
+		return fmt.Errorf("publish run %q: %w", runID, err)
+	}
+	return nil
 }
 
 func List(root string) ([]RunRecord, error) {
@@ -107,7 +136,7 @@ func ListFiltered(root string, filter ListFilter) ([]RunRecord, error) {
 		return nil, err
 	}
 	records := []RunRecord{}
-	invalid := []string{}
+	invalid := []InvalidRecord{}
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -117,7 +146,7 @@ func ListFiltered(root string, filter ListFilter) ([]RunRecord, error) {
 		}
 		record, err := Read(root, entry.Name())
 		if err != nil {
-			invalid = append(invalid, entry.Name())
+			invalid = append(invalid, InvalidRecord{RunID: entry.Name(), Error: err.Error()})
 			continue
 		}
 		if !matchesFilter(record, filter) {
@@ -125,15 +154,17 @@ func ListFiltered(root string, filter ListFilter) ([]RunRecord, error) {
 		}
 		records = append(records, record)
 	}
-	if len(invalid) > 0 {
-		sort.Strings(invalid)
-		return nil, fmt.Errorf("invalid run record(s): %s", strings.Join(invalid, ", "))
-	}
 	sort.Slice(records, func(i, j int) bool {
 		return records[i].RunID > records[j].RunID
 	})
 	if filter.Limit > 0 && len(records) > filter.Limit {
 		records = records[:filter.Limit]
+	}
+	if len(invalid) > 0 {
+		sort.Slice(invalid, func(i, j int) bool {
+			return invalid[i].RunID < invalid[j].RunID
+		})
+		return records, &InvalidRecordsError{Records: invalid}
 	}
 	return records, nil
 }
@@ -186,15 +217,32 @@ func Read(root string, query string) (RunRecord, error) {
 	dir := filepath.Join(root, query)
 	data, err := os.ReadFile(filepath.Join(dir, "run.json"))
 	if err != nil {
-		return RunRecord{}, err
+		if errors.Is(err, os.ErrNotExist) {
+			return RunRecord{}, fmt.Errorf("run.json is missing")
+		}
+		var pathErr *os.PathError
+		if errors.As(err, &pathErr) {
+			return RunRecord{}, fmt.Errorf("cannot read run.json: %v", pathErr.Err)
+		}
+		return RunRecord{}, fmt.Errorf("cannot read run.json: %v", err)
 	}
 	var record RunRecord
 	if err := json.Unmarshal(data, &record); err != nil {
 		return RunRecord{}, err
 	}
-	if record.Path == "" {
-		record.Path = dir
+	if record.RunID != query {
+		return RunRecord{}, fmt.Errorf("run id mismatch: record has %q", record.RunID)
 	}
+	if record.Result == nil {
+		return RunRecord{}, fmt.Errorf("run result is missing")
+	}
+	if _, err := time.Parse(time.RFC3339, record.CreatedAt); err != nil {
+		return RunRecord{}, fmt.Errorf("invalid created_at: %w", err)
+	}
+	// The embedded result is the canonical source for user-visible run state.
+	record.Target = record.Result.RequestedTarget
+	record.Status = record.Result.Status
+	record.Path = dir
 	return record, nil
 }
 
@@ -239,7 +287,10 @@ func FindBySessionID(root string, sessionID string) (RunRecord, bool, error) {
 	}
 	records, err := List(root)
 	if err != nil {
-		return RunRecord{}, false, err
+		var invalid *InvalidRecordsError
+		if !errors.As(err, &invalid) {
+			return RunRecord{}, false, err
+		}
 	}
 	for _, record := range records {
 		if record.Result != nil && record.Result.SessionID == sessionID {

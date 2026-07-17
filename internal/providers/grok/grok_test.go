@@ -1,6 +1,7 @@
 package grok
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,7 +24,7 @@ func TestBuildInlinePrompt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{bin, "--output-format", "json", "--always-approve", "--cwd", "/tmp/project", "--model", "grok-4.5", "--single", "hello"}
+	want := []string{bin, "--output-format", "json", "--always-approve", "--no-subagents", "--cwd", "/tmp/project", "--model", "grok-4.5", "--single", "hello"}
 	if strings.Join(spec.Args, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("args=%#v want=%#v", spec.Args, want)
 	}
@@ -74,10 +75,10 @@ func TestBuildProviderOptions(t *testing.T) {
 	spec, err := (Provider{}).Build(providers.BuildRequest{
 		Prompt: "hello",
 		Target: routing.DispatchTarget{Requested: "grok", Provider: "grok", Model: "grok-4.5"},
+		Effort: contract.EffortLow,
 		ProviderOptions: map[string]string{
 			"approval":   "default",
 			"max-turns":  "1",
-			"effort":     "low",
 			"web-search": "off",
 			"subagents":  "off",
 		},
@@ -93,6 +94,58 @@ func TestBuildProviderOptions(t *testing.T) {
 	}
 	if strings.Contains(joined, "--always-approve") {
 		t.Fatalf("approval=default should not add --always-approve: %#v", spec.Args)
+	}
+}
+
+func TestBuildAutoEffortOmitsReasoningEffort(t *testing.T) {
+	bin := writeFakeGrok(t)
+	t.Setenv("AI_DISPATCH_GROK_BIN", bin)
+	spec, err := (Provider{}).Build(providers.BuildRequest{
+		Prompt: "hello",
+		Target: routing.DispatchTarget{Requested: "grok", Provider: "grok", Model: "grok-4.5"},
+		Effort: contract.EffortAuto,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(spec.Args, "\x00"), "--reasoning-effort") {
+		t.Fatalf("auto must omit --reasoning-effort: %#v", spec.Args)
+	}
+}
+
+func TestResolveGrokEffort(t *testing.T) {
+	p := Provider{}
+	exact := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "grok-4.5", Requested: contract.EffortHigh})
+	if exact.Applied != contract.EffortHigh || exact.Fallback {
+		t.Fatalf("exact=%+v", exact)
+	}
+	composer := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "grok-composer-2.5-fast", Requested: contract.EffortLow})
+	if composer.Applied != contract.EffortAuto || !composer.Fallback {
+		t.Fatalf("composer=%+v", composer)
+	}
+	multi := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "grok-4.5-multi-agent", Requested: contract.EffortMedium})
+	if multi.Applied != contract.EffortAuto || !multi.Fallback {
+		t.Fatalf("multi=%+v", multi)
+	}
+	xhigh := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "grok-4.5", Requested: contract.EffortXHigh})
+	if xhigh.Applied != contract.EffortAuto || !xhigh.Fallback {
+		t.Fatalf("xhigh=%+v", xhigh)
+	}
+}
+
+func TestBuildAllowsSubagentsExplicitly(t *testing.T) {
+	bin := writeFakeGrok(t)
+	t.Setenv("AI_DISPATCH_GROK_BIN", bin)
+	spec, err := (Provider{}).Build(providers.BuildRequest{
+		Prompt:          "hello",
+		Target:          routing.DispatchTarget{Requested: "grok", Provider: "grok", Model: "grok-4.5"},
+		ProviderOptions: map[string]string{"subagents": "on"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(spec.Args, "\x00"), "--no-subagents") {
+		t.Fatalf("args=%#v", spec.Args)
 	}
 }
 
@@ -211,6 +264,22 @@ func TestParseTimeout(t *testing.T) {
 	}
 }
 
+func TestParseTimeoutRedactsDiagnostics(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	result := (Provider{}).Parse(runtime.RunResult{
+		TimedOut: true,
+		Stderr:   []byte("\x1b[31murl=http://localhost?sc_token=timeout-secret path=" + home + "/private\x1b[0m"),
+		ExitCode: 124,
+	}, providers.BuildRequest{Target: routing.DispatchTarget{Requested: "grok", Provider: "grok", Model: "grok-4.5"}})
+	if result.OK || result.FailureClass == nil || *result.FailureClass != contract.FailureTimeout {
+		t.Fatalf("result=%+v", result)
+	}
+	if strings.Contains(result.Stderr, "timeout-secret") || strings.Contains(result.Stderr, home) || strings.Contains(result.Stderr, "\x1b") {
+		t.Fatalf("timeout diagnostics were not redacted: %q", result.Stderr)
+	}
+}
+
 func TestParseModelFailureIsConfig(t *testing.T) {
 	result := (Provider{}).Parse(runtime.RunResult{
 		Stderr:   []byte("unknown model: grok-missing"),
@@ -218,6 +287,9 @@ func TestParseModelFailureIsConfig(t *testing.T) {
 	}, providers.BuildRequest{Target: routing.DispatchTarget{Requested: "grok", Provider: "grok", Model: "grok-missing"}})
 	if result.OK || result.FailureClass == nil || *result.FailureClass != contract.FailureConfig {
 		t.Fatalf("result=%+v", result)
+	}
+	if len(result.Warnings) != 0 {
+		t.Fatalf("fatal stderr must not be labeled non-fatal: %+v", result.Warnings)
 	}
 }
 

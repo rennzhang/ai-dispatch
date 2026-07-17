@@ -2,6 +2,7 @@ package antigravity
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -9,13 +10,17 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
+	"syscall"
 )
 
 const defaultFlashLabel = "Gemini 3.5 Flash (Medium)"
 const defaultProLabel = "Gemini 3.1 Pro (High)"
+const legacyModelRecoveryJournalName = "settings.json.ai-dispatch-recovery"
 
 var sessionRE = regexp.MustCompile(`Created conversation ([0-9a-f-]{36})`)
 var modelRE = regexp.MustCompile(`(?i)selected model override to backend: label="([^"]+)"`)
@@ -31,13 +36,34 @@ type agyDriverConfig struct {
 	AgyRoot      string
 }
 
+type legacyModelRecoveryJournal struct {
+	Version  int    `json:"version"`
+	Original []byte `json:"original"`
+	Mode     uint32 `json:"mode"`
+}
+
+type agyProcessCleanup struct {
+	once sync.Once
+	run  func() error
+	err  error
+}
+
+func (c *agyProcessCleanup) cleanup() error {
+	c.once.Do(func() {
+		c.err = c.run()
+	})
+	return c.err
+}
+
 func RunAgyDriverCLI(argv []string, stdout io.Writer, stderr io.Writer) int {
 	cfg, err := parseAgyDriverArgs(argv, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	if err := runAgyDriver(cfg, stdout, stderr); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := runAgyDriverContext(ctx, cfg, stdout, stderr); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
@@ -82,12 +108,22 @@ func parseAgyDriverArgs(argv []string, stderr io.Writer) (agyDriverConfig, error
 }
 
 func runAgyDriver(cfg agyDriverConfig, stdout io.Writer, stderr io.Writer) error {
+	return runAgyDriverContext(context.Background(), cfg, stdout, stderr)
+}
+
+func runAgyDriverContext(ctx context.Context, cfg agyDriverConfig, stdout io.Writer, stderr io.Writer) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("agy canceled before start: %w", err)
+	}
 	agyBin, err := resolveAgyBinary(cfg.AgyBin)
 	if err != nil {
 		return err
 	}
 	root, err := agyRoot(cfg.AgyRoot)
 	if err != nil {
+		return err
+	}
+	if err := recoverLegacyModelSwitchContext(ctx, root); err != nil {
 		return err
 	}
 	if cfg.SessionID != "" {
@@ -113,6 +149,9 @@ func runAgyDriver(cfg agyDriverConfig, stdout io.Writer, stderr io.Writer) error
 	}
 
 	args := []string{"--dangerously-skip-permissions", "--log-file", logPath}
+	if modelLabel != "" {
+		args = append(args, "--model", modelLabel)
+	}
 	if cfg.PrintTimeout != "" {
 		args = append(args, "--print-timeout", cfg.PrintTimeout)
 	}
@@ -124,28 +163,24 @@ func runAgyDriver(cfg agyDriverConfig, stdout io.Writer, stderr io.Writer) error
 	}
 	args = append(args, "--print", cfg.Prompt)
 
-	var childStdout []byte
-	var childStderr []byte
-	withErr := withTemporaryModel(root, modelLabel, func() error {
-		cmd := exec.Command(agyBin, args...)
-		var outBuf bytes.Buffer
-		var errBuf bytes.Buffer
-		cmd.Stdout = &outBuf
-		cmd.Stderr = &errBuf
-		err := cmd.Run()
-		childStdout = outBuf.Bytes()
-		childStderr = errBuf.Bytes()
-		return err
-	})
-
-	logText := readText(logPath)
+	childStdout, childStderr, warnings, withErr := executeAgyBounded(ctx, agyBin, args)
+	logText, logWarnings := readAgyLog(logPath)
+	warnings = append(warnings, logWarnings...)
 	sessionID := firstNonEmpty(cfg.SessionID, matchFirst(sessionRE, logText))
 	modelObserved := firstNonEmpty(matchFirst(modelRE, logText), modelLabel)
 	text := strings.TrimSpace(string(childStdout))
-	if sessionID != "" {
-		if transcriptText := extractFinalTranscriptText(transcriptPath(root, sessionID), transcriptOffset); transcriptText != "" {
+	if cfg.SessionID != "" {
+		text, logWarnings = extractFinalTranscriptText(transcriptPath(root, sessionID), transcriptOffset)
+		warnings = append(warnings, logWarnings...)
+	} else if sessionID != "" {
+		transcriptText, transcriptWarnings := extractFinalTranscriptText(transcriptPath(root, sessionID), transcriptOffset)
+		warnings = append(warnings, transcriptWarnings...)
+		if transcriptText != "" {
 			text = transcriptText
 		}
+	}
+	for _, warning := range warnings {
+		emitJSON(stdout, map[string]any{"event": "warning", "message": warning})
 	}
 	if sessionID != "" {
 		emitJSON(stdout, map[string]any{"event": "session_start", "session_id": sessionID, "model": modelObserved})
@@ -154,22 +189,62 @@ func runAgyDriver(cfg agyDriverConfig, stdout io.Writer, stderr io.Writer) error
 		emitJSON(stdout, map[string]any{"event": "assistant_text", "text": text, "session_id": sessionID, "model": modelObserved})
 	}
 	emitJSON(stdout, map[string]any{"event": "done", "text": text, "session_id": sessionID, "model": modelObserved})
-	if len(childStderr) > 0 {
-		fmt.Fprint(stderr, strings.TrimSpace(string(childStderr)))
-	}
+	childDiagnostic := strings.TrimSpace(string(childStderr))
 	if withErr != nil {
-		if strings.TrimSpace(string(childStderr)) == "" {
-			fmt.Fprint(stderr, summarizeLog(logText))
+		if logDiagnostic := actionableAgyLogError(logText); logDiagnostic != "" {
+			childDiagnostic = joinDiagnosticLines(childDiagnostic, logDiagnostic)
+		}
+		if childDiagnostic != "" {
+			fmt.Fprintln(stderr, childDiagnostic)
 		}
 		return fmt.Errorf("agy failed: %w", withErr)
 	}
+	if childDiagnostic != "" {
+		fmt.Fprintln(stderr, childDiagnostic)
+	}
 	if text == "" {
-		if summary := summarizeLog(logText); summary != "" {
+		if summary := actionableAgyLogError(logText); summary != "" {
 			return fmt.Errorf("agy completed without output; %s", summary)
 		}
 		return fmt.Errorf("agy completed without output; verify agy login and Chrome authorization before retrying")
 	}
 	return nil
+}
+
+func executeAgyBounded(ctx context.Context, agyBin string, args []string) ([]byte, []byte, []string, error) {
+	stdoutCapture := newBoundedHeadTailBuffer(agyStdoutHeadLimitBytes, agyStdoutTailLimitBytes)
+	stderrCapture := newBoundedHeadTailBuffer(agyStderrHeadLimitBytes, agyStderrTailLimitBytes)
+	cmd := exec.CommandContext(ctx, agyBin, args...)
+	configureAgyProcess(cmd)
+	cleanup := &agyProcessCleanup{run: func() error { return terminateAgyProcessTree(cmd) }}
+	cmd.Cancel = cleanup.cleanup
+	cmd.Stdout = stdoutCapture
+	cmd.Stderr = stderrCapture
+	runErr := cmd.Run()
+	cleanupErr := cleanup.cleanup()
+	if cleanupErr != nil {
+		runErr = errors.Join(runErr, cleanupErr)
+	}
+	warnings := []string{}
+	if stdoutCapture.Truncated() {
+		warnings = append(warnings, stdoutCapture.truncationWarning("agy child stdout"))
+	}
+	if stderrCapture.Truncated() {
+		warnings = append(warnings, stderrCapture.truncationWarning("agy child stderr"))
+	}
+	return stdoutCapture.Bytes(), stderrCapture.Bytes(), warnings, runErr
+}
+
+func readAgyLog(path string) (string, []string) {
+	data, truncated, err := readBoundedHeadTailFile(path, agyLogHeadLimitBytes, agyLogTailLimitBytes)
+	if err != nil {
+		return "", []string{"agy log read failed: " + compactFileError(err)}
+	}
+	warnings := []string{}
+	if truncated {
+		warnings = append(warnings, fmt.Sprintf("agy log exceeded the %d-byte read limit; retained bounded head and final tail", agyLogHeadLimitBytes+agyLogTailLimitBytes))
+	}
+	return string(data), warnings
 }
 
 func resolveAgyBinary(explicit string) (string, error) {
@@ -220,61 +295,98 @@ func agyRoot(explicit string) (string, error) {
 }
 
 func resolveModelLabel(model string) (string, error) {
-	normalized := strings.ToLower(strings.TrimSpace(model))
+	trimmed := strings.TrimSpace(model)
+	if trimmed == "" {
+		// Empty means no --model override; agy uses its own default model.
+		return "", nil
+	}
+	// Exact agy display labels (including effort tags) pass through unchanged.
+	if agyEffortLabelRE.MatchString(trimmed) || strings.Contains(trimmed, " (") {
+		return trimmed, nil
+	}
+	normalized := strings.ToLower(trimmed)
 	switch normalized {
-	case "", "flash", "gemini-3-flash", "gemini-3.1-flash", "gemini-3.5-flash", "google/gemini-3-flash-preview", "google/gemini-3.1-flash-preview", "google/gemini-3.5-flash", "google/antigravity-gemini-3-flash", "model_placeholder_m18", "model_placeholder_m132":
+	case "flash", "gemini-3-flash", "gemini-3.1-flash", "gemini-3.5-flash", "google/gemini-3-flash-preview", "google/gemini-3.1-flash-preview", "google/gemini-3.5-flash", "google/antigravity-gemini-3-flash", "model_placeholder_m18", "model_placeholder_m132":
 		return defaultFlashLabel, nil
 	case "pro", "pro-high", "gemini-3-pro-high", "gemini-3.1-pro-high", "google/gemini-3-pro-preview", "google/gemini-3.1-pro-preview", "google/antigravity-gemini-3-pro-high", "model_placeholder_m37":
 		return defaultProLabel, nil
 	case "pro-low", "gemini-3-pro-low", "gemini-3.1-pro-low", "google/antigravity-gemini-3-pro-low":
 		return "Gemini 3.1 Pro (Low)", nil
 	default:
-		return "", fmt.Errorf("agy backend has no verified settings mapping for model %q", model)
+		return "", fmt.Errorf("agy has no verified model label mapping for %q", model)
 	}
 }
 
-func withTemporaryModel(root string, modelLabel string, fn func() error) error {
-	settingsPath := filepath.Join(root, "settings.json")
+func recoverLegacyModelSwitchContext(ctx context.Context, root string) error {
+	journalPath := legacyModelRecoveryJournalPath(root)
+	if _, err := os.Stat(journalPath); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("cannot inspect legacy agy settings recovery journal: %w", err)
+	}
+
 	lockPath := filepath.Join(root, "settings.json.lock")
 	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return err
+		return fmt.Errorf("cannot open legacy agy settings recovery lock: %w", err)
 	}
 	defer lock.Close()
-	if err := flock(lock); err != nil {
-		return err
+	if err := flockContext(ctx, lock); err != nil {
+		return fmt.Errorf("cannot acquire legacy agy settings recovery lock: %w", err)
 	}
 	defer funlock(lock)
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("legacy agy settings recovery canceled: %w", err)
+	}
+	return recoverLegacyModelSwitchLocked(root)
+}
 
-	original, err := os.ReadFile(settingsPath)
+func legacyModelRecoveryJournalPath(root string) string {
+	return filepath.Join(root, legacyModelRecoveryJournalName)
+}
+
+func recoverLegacyModelSwitchLocked(root string) error {
+	journalPath := legacyModelRecoveryJournalPath(root)
+	data, err := os.ReadFile(journalPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
-		return fmt.Errorf("cannot read agy settings.json: %w", err)
+		return fmt.Errorf("cannot read legacy agy settings recovery journal: %w", err)
 	}
-	var payload map[string]any
-	if err := json.Unmarshal(original, &payload); err != nil {
-		return fmt.Errorf("agy settings.json is not valid JSON: %w", err)
+	var journal legacyModelRecoveryJournal
+	if err := json.Unmarshal(data, &journal); err != nil || journal.Version != 1 || len(journal.Original) == 0 {
+		if err == nil {
+			err = errors.New("unsupported or empty journal")
+		}
+		return fmt.Errorf("legacy agy settings recovery journal is invalid: %w", err)
 	}
-	changed := strings.TrimSpace(fmt.Sprint(payload["model"])) != modelLabel
-	if changed {
-		payload["model"] = modelLabel
-		data, err := json.MarshalIndent(payload, "", "  ")
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(settingsPath, data, 0o600); err != nil {
-			return err
-		}
-		runErr := fn()
-		if restoreErr := os.WriteFile(settingsPath, original, 0o600); restoreErr != nil {
-			restoreMsg := fmt.Errorf("failed to restore agy settings.json after temporary model switch: %s", compactFileError(restoreErr))
-			if runErr != nil {
-				return errors.Join(runErr, restoreMsg)
-			}
-			return restoreMsg
-		}
-		return runErr
+	settingsPath := filepath.Join(root, "settings.json")
+	current, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return fmt.Errorf("cannot safely recover legacy agy settings.json; journal preserved: %w", err)
 	}
-	return fn()
+	// Version 1 recorded only the original bytes, not the temporary bytes that
+	// ai-dispatch applied. A changed file therefore cannot be attributed safely.
+	if !bytes.Equal(current, journal.Original) {
+		return errors.New("legacy agy settings recovery journal cannot verify the current settings.json was written by ai-dispatch; settings and journal were preserved unchanged")
+	}
+	if err := os.Remove(journalPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("cannot remove legacy agy settings recovery journal: %w", err)
+	}
+	if err := syncDirectory(root); err != nil {
+		return fmt.Errorf("cannot durably remove legacy agy settings recovery journal: %w", err)
+	}
+	return nil
+}
+
+func syncDirectory(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }
 
 func compactFileError(err error) string {
@@ -283,37 +395,6 @@ func compactFileError(err error) string {
 		return pathErr.Err.Error()
 	}
 	return err.Error()
-}
-
-func extractFinalTranscriptText(path string, startOffset int64) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	if startOffset > 0 && startOffset < int64(len(data)) {
-		data = data[startOffset:]
-	}
-	text := ""
-	for _, raw := range strings.Split(string(data), "\n") {
-		line := strings.TrimSpace(raw)
-		if line == "" {
-			continue
-		}
-		var item map[string]any
-		if err := json.Unmarshal([]byte(line), &item); err != nil {
-			continue
-		}
-		if item["source"] != "MODEL" || item["type"] != "PLANNER_RESPONSE" {
-			continue
-		}
-		if calls, ok := item["tool_calls"].([]any); ok && len(calls) > 0 {
-			continue
-		}
-		if content, ok := item["content"].(string); ok && strings.TrimSpace(content) != "" {
-			text = strings.TrimSpace(content)
-		}
-	}
-	return text
 }
 
 func conversationPath(root string, sessionID string) string {
@@ -332,14 +413,6 @@ func fileSize(path string) int64 {
 	return info.Size()
 }
 
-func readText(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	return string(data)
-}
-
 func matchFirst(re *regexp.Regexp, text string) string {
 	match := re.FindStringSubmatch(text)
 	if len(match) > 1 {
@@ -348,25 +421,58 @@ func matchFirst(re *regexp.Regexp, text string) string {
 	return ""
 }
 
-func summarizeLog(text string) string {
-	lines := []string{}
-	for _, raw := range strings.Split(text, "\n") {
-		line := strings.TrimSpace(raw)
-		if line == "" {
-			continue
-		}
-		lower := strings.ToLower(line)
-		if strings.Contains(lower, "error") || strings.Contains(lower, "auth") || strings.Contains(lower, "login") || strings.Contains(lower, "oauth") || strings.Contains(lower, "browser") {
-			lines = append(lines, line)
-		}
-	}
-	if len(lines) == 0 {
+func actionableAgyLogError(text string) string {
+	lower := strings.ToLower(text)
+	switch {
+	case containsAgyLogPhrase(lower,
+		"user location is not supported",
+		"location is not supported",
+		"unsupported region",
+		"not available in your region",
+		"country, region, or territory is not supported",
+	):
+		return "Antigravity is not available in the current region"
+	case containsAgyLogPhrase(lower,
+		"not logged in",
+		"login required",
+		"please log in",
+		"requires login",
+	):
+		return "Antigravity is not logged in; complete agy login and Chrome authorization before retrying"
+	case containsAgyLogPhrase(lower,
+		"account is ineligible",
+		"account ineligible",
+		"account is not eligible",
+		"account not eligible",
+		"not eligible for antigravity",
+		"not available for your account",
+	):
+		return "Antigravity account is not eligible for this model or service"
+	default:
 		return ""
 	}
-	if len(lines) > 5 {
-		lines = lines[len(lines)-5:]
+}
+
+func containsAgyLogPhrase(text string, phrases ...string) bool {
+	for _, phrase := range phrases {
+		if strings.Contains(text, phrase) {
+			return true
+		}
 	}
-	return strings.Join(lines, "\n")
+	return false
+}
+
+func joinDiagnosticLines(left string, right string) string {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	switch {
+	case left == "":
+		return right
+	case right == "", strings.Contains(left, right):
+		return left
+	default:
+		return left + "\n" + right
+	}
 }
 
 func emitJSON(w io.Writer, payload map[string]any) {

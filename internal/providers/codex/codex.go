@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -16,14 +17,27 @@ type Provider struct{}
 
 func (Provider) Name() string { return "codex" }
 
+func (Provider) ResolveEffort(_ context.Context, req providers.EffortRequest) providers.EffortResolution {
+	requested := contract.NormalizeEffort(req.Requested)
+	if requested == contract.EffortAuto {
+		return providers.EffortAuto(requested, req.Model)
+	}
+	if codexSupportsEffort(req.Model, requested) {
+		return providers.EffortExact(requested, req.Model)
+	}
+	return providers.EffortFallback(requested, req.Model,
+		fmt.Sprintf("effort %s is not supported by codex/%s; applied auto", requested, effortModelLabel(req.Model)))
+}
+
 func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 	args := []string{
 		"codex",
 		"exec",
 		"--dangerously-bypass-approvals-and-sandbox",
 		"--json",
-		"-c",
-		`model_reasoning_effort="high"`,
+	}
+	if req.Effort != "" && req.Effort != contract.EffortAuto {
+		args = append(args, "-c", fmt.Sprintf(`model_reasoning_effort="%s"`, req.Effort))
 	}
 	if req.Target.Model != "" {
 		if strings.HasPrefix(req.Target.Model, "openrouter/") {
@@ -156,4 +170,27 @@ func routeLabel(provider string, model string) string {
 		return provider
 	}
 	return provider + ":" + model
+}
+
+func codexSupportsEffort(model string, effort contract.Effort) bool {
+	// Exact allowlist only. Unknown/unverified models (including other GPT-5.x
+	// variants) must fall back to auto; never guess via contains/prefix matching.
+	switch effort {
+	case contract.EffortLow, contract.EffortMedium, contract.EffortHigh, contract.EffortXHigh, contract.EffortMax:
+	default:
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(model)) {
+	case "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra":
+		return true
+	default:
+		return false
+	}
+}
+
+func effortModelLabel(model string) string {
+	if strings.TrimSpace(model) == "" {
+		return "default"
+	}
+	return model
 }

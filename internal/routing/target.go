@@ -144,6 +144,10 @@ func providerTarget(target string, provider string, model string) (DispatchTarge
 		return DispatchTarget{}, err
 	} else if ok {
 		entry := match.entry
+		entryProvider := registryEntryProvider(entry)
+		if entryProvider != provider {
+			return DispatchTarget{}, fmt.Errorf("model alias %q belongs to provider %q, not %q", model, entryProvider, provider)
+		}
 		if preserveExplicitActualModelID(provider, entry, match) {
 			resolved = strings.TrimSpace(model)
 		} else {
@@ -164,6 +168,14 @@ func providerTarget(target string, provider string, model string) (DispatchTarge
 		Model:     resolved,
 		Source:    "provider",
 	}, nil
+}
+
+func registryEntryProvider(entry registryEntry) string {
+	provider := normalizeProvider(entry.DispatchRunner)
+	if provider == "" {
+		provider = normalizeProvider(entry.Provider)
+	}
+	return provider
 }
 
 func preserveExplicitActualModelID(provider string, entry registryEntry, match registryMatch) bool {

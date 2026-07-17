@@ -45,7 +45,12 @@ func validateFormat(format string) error {
 }
 
 func modelsResolve(argv []string, stdout io.Writer, stderr io.Writer) int {
-	argv = reorderInterspersedFlags(argv)
+	var err error
+	argv, err = reorderInterspersedFlags(argv)
+	if err != nil {
+		fmt.Fprintln(stderr, "ai-dispatch models resolve:", err)
+		return 2
+	}
 	fs := flag.NewFlagSet("models resolve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	format := fs.String("format", "json", "json")

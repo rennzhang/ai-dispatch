@@ -27,7 +27,7 @@ func runs(argv []string, stdout io.Writer, stderr io.Writer) int {
 			return 2
 		}
 		records, err := runstore.ListFiltered("", filter)
-		if err != nil {
+		if err := surfaceInvalidRunRecords(err, stderr); err != nil {
 			fmt.Fprintln(stderr, "ai-dispatch runs list:", err)
 			return 1
 		}
@@ -57,6 +57,20 @@ func runs(argv []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "ai-dispatch runs: unknown subcommand %q\n", argv[0])
 		return 2
 	}
+}
+
+func surfaceInvalidRunRecords(err error, stderr io.Writer) error {
+	if err == nil {
+		return nil
+	}
+	var invalid *runstore.InvalidRecordsError
+	if !errors.As(err, &invalid) {
+		return err
+	}
+	for _, record := range invalid.Records {
+		fmt.Fprintf(stderr, "ai-dispatch runs: skipped invalid run record %s: %s\n", record.RunID, record.Error)
+	}
+	return nil
 }
 
 func parseRunsListFlags(argv []string, stderr io.Writer) (runstore.ListFilter, error) {
@@ -89,24 +103,27 @@ func parseRunsListFlags(argv []string, stderr io.Writer) (runstore.ListFilter, e
 }
 
 type runListSummary struct {
-	RunID           string                `json:"run_id"`
-	CreatedAt       string                `json:"created_at"`
-	TaskName        string                `json:"task_name,omitempty"`
-	Target          string                `json:"target,omitempty"`
-	Status          contract.Status       `json:"status,omitempty"`
-	ProviderUsed    string                `json:"provider_used,omitempty"`
-	ModelUsed       string                `json:"model_used,omitempty"`
-	RequestedTarget string                `json:"requested_target,omitempty"`
-	Degraded        bool                  `json:"degraded,omitempty"`
-	DegradeReason   string                `json:"degrade_reason,omitempty"`
-	FailureClass    contract.FailureClass `json:"failure_class,omitempty"`
-	NextAction      contract.NextAction   `json:"next_action,omitempty"`
-	ExitCode        int                   `json:"exit_code,omitempty"`
-	DurationMS      int64                 `json:"duration_ms,omitempty"`
-	WarningsCount   int                   `json:"warnings_count,omitempty"`
-	StderrBytes     int                   `json:"stderr_bytes,omitempty"`
-	OutputFile      string                `json:"output_file,omitempty"`
-	Path            string                `json:"path"`
+	RunID                string                `json:"run_id"`
+	CreatedAt            string                `json:"created_at"`
+	TaskName             string                `json:"task_name,omitempty"`
+	Target               string                `json:"target,omitempty"`
+	Status               contract.Status       `json:"status,omitempty"`
+	ProviderUsed         string                `json:"provider_used,omitempty"`
+	ModelUsed            string                `json:"model_used,omitempty"`
+	RequestedTarget      string                `json:"requested_target,omitempty"`
+	Degraded             bool                  `json:"degraded,omitempty"`
+	DegradeReason        string                `json:"degrade_reason,omitempty"`
+	RequestedEffort      contract.Effort       `json:"requested_effort,omitempty"`
+	AppliedEffort        contract.Effort       `json:"applied_effort,omitempty"`
+	EffortFallbackReason string                `json:"effort_fallback_reason,omitempty"`
+	FailureClass         contract.FailureClass `json:"failure_class,omitempty"`
+	NextAction           contract.NextAction   `json:"next_action,omitempty"`
+	ExitCode             int                   `json:"exit_code,omitempty"`
+	DurationMS           int64                 `json:"duration_ms,omitempty"`
+	WarningsCount        int                   `json:"warnings_count,omitempty"`
+	StderrBytes          int                   `json:"stderr_bytes,omitempty"`
+	OutputFile           string                `json:"output_file,omitempty"`
+	Path                 string                `json:"path"`
 }
 
 func summarizeRunRecords(records []runstore.RunRecord) []runListSummary {
@@ -135,6 +152,9 @@ func summarizeRunRecord(record runstore.RunRecord) runListSummary {
 	summary.RequestedTarget = result.RequestedTarget
 	summary.Degraded = result.Degraded
 	summary.DegradeReason = result.DegradeReason
+	summary.RequestedEffort = result.RequestedEffort
+	summary.AppliedEffort = result.AppliedEffort
+	summary.EffortFallbackReason = result.EffortFallbackReason
 	if result.FailureClass != nil {
 		summary.FailureClass = *result.FailureClass
 	}

@@ -1,6 +1,7 @@
 package grok
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,18 @@ type Provider struct{}
 
 func (Provider) Name() string { return "grok" }
 
+func (Provider) ResolveEffort(_ context.Context, req providers.EffortRequest) providers.EffortResolution {
+	requested := contract.NormalizeEffort(req.Requested)
+	if requested == contract.EffortAuto {
+		return providers.EffortAuto(requested, req.Model)
+	}
+	if grokSupportsEffort(req.Model, requested) {
+		return providers.EffortExact(requested, req.Model)
+	}
+	return providers.EffortFallback(requested, req.Model,
+		fmt.Sprintf("effort %s is not supported by grok/%s; applied auto", requested, effortModelLabel(req.Model)))
+}
+
 func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 	bin, err := grokBinary()
 	if err != nil {
@@ -31,6 +44,9 @@ func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 	}
 	if err := appendGrokOptions(&args, req.ProviderOptions); err != nil {
 		return runtime.CommandSpec{}, err
+	}
+	if req.Effort != "" && req.Effort != contract.EffortAuto {
+		args = append(args, "--reasoning-effort", string(req.Effort))
 	}
 	if req.CWD != "" {
 		args = append(args, "--cwd", req.CWD)
@@ -71,9 +87,6 @@ func appendGrokOptions(args *[]string, opts map[string]string) error {
 		}
 		*args = append(*args, "--max-turns", maxTurns)
 	}
-	if effort := strings.TrimSpace(opts["effort"]); effort != "" {
-		*args = append(*args, "--reasoning-effort", effort)
-	}
 	if webSearch := strings.TrimSpace(opts["web-search"]); webSearch != "" {
 		switch webSearch {
 		case "off":
@@ -83,14 +96,16 @@ func appendGrokOptions(args *[]string, opts map[string]string) error {
 			return fmt.Errorf("grok.web-search must be on or off")
 		}
 	}
-	if subagents := strings.TrimSpace(opts["subagents"]); subagents != "" {
-		switch subagents {
-		case "off":
-			*args = append(*args, "--no-subagents")
-		case "on":
-		default:
-			return fmt.Errorf("grok.subagents must be on or off")
-		}
+	subagents := strings.TrimSpace(opts["subagents"])
+	if subagents == "" {
+		subagents = "off"
+	}
+	switch subagents {
+	case "off":
+		*args = append(*args, "--no-subagents")
+	case "on":
+	default:
+		return fmt.Errorf("grok.subagents must be on or off")
 	}
 	return nil
 }
@@ -160,14 +175,17 @@ func (Provider) Parse(run runtime.RunResult, req providers.BuildRequest) contrac
 	next := contract.NextDone
 	ok := run.ExitCode == 0 && parseErr == nil && strings.TrimSpace(text) != ""
 	resultStderr := ""
-	warnings := grokWarnings(stderr)
+	warnings := []string{}
+	if ok {
+		warnings = grokWarnings(stderr)
+	}
 	if run.TimedOut {
 		status = contract.StatusTimeout
 		f := contract.FailureTimeout
 		failure = &f
 		next = contract.NextRetry
 		ok = false
-		resultStderr = stderr
+		resultStderr = redactGrokDiagnostics(stderr)
 		if strings.TrimSpace(resultStderr) == "" {
 			resultStderr = diagnostics.TimeoutMessage("Grok", run.FixedTimeout, run.ActivityTimeout, req.TimeoutSeconds, req.ActivityTimeoutSeconds)
 		}
@@ -299,4 +317,34 @@ func routeLabel(provider string, model string) string {
 		return provider
 	}
 	return provider + ":" + model
+}
+
+func grokSupportsEffort(model string, effort contract.Effort) bool {
+	// Only verified single-model reasoning-depth IDs. Multi-agent models use
+	// agent-count semantics and must not receive --reasoning-effort here.
+	switch effort {
+	case contract.EffortLow, contract.EffortMedium, contract.EffortHigh:
+	default:
+		return false
+	}
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	if normalized == "" {
+		return false
+	}
+	if strings.Contains(normalized, "multi") || strings.Contains(normalized, "agent") {
+		return false
+	}
+	switch normalized {
+	case "grok-4.5", "grok-4", "grok4.5", "grok4":
+		return true
+	default:
+		return false
+	}
+}
+
+func effortModelLabel(model string) string {
+	if strings.TrimSpace(model) == "" {
+		return "default"
+	}
+	return model
 }

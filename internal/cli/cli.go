@@ -14,7 +14,7 @@ import (
 	"github.com/rennzhang/ai-dispatch/internal/dispatch"
 	"github.com/rennzhang/ai-dispatch/internal/providers/antigravity"
 	"github.com/rennzhang/ai-dispatch/internal/providers/claude"
-	"github.com/rennzhang/ai-dispatch/internal/routing"
+	"github.com/rennzhang/ai-dispatch/internal/runstore"
 	"github.com/rennzhang/ai-dispatch/internal/setup"
 )
 
@@ -68,6 +68,8 @@ func MainWithInput(argv []string, stdout io.Writer, stderr io.Writer, stdin io.R
 		return send(args[1:], stdout, stderr, stdin)
 	case "resume":
 		return resume(args[1:], stdout, stderr, stdin)
+	case "version", "--version":
+		return versionCommand(args[1:], stdout, stderr)
 	default:
 		return emitCLIError(stdout, stderr, false, fmt.Sprintf("unknown command: %s", args[0]), 2)
 	}
@@ -87,10 +89,12 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "  ai-dispatch doctor --format json")
 	fmt.Fprintln(w, "  ai-dispatch models --format json")
 	fmt.Fprintln(w, "  ai-dispatch preferences path|show|open")
+	fmt.Fprintln(w, "  ai-dispatch version [--format json]")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Common flags:")
 	fmt.Fprintln(w, "  --json-result                  write ProviderResult JSON to stdout")
 	fmt.Fprintln(w, "  --stream-progress              write progress NDJSON to stderr")
+	fmt.Fprintln(w, "  --effort level                 reasoning effort: auto|none|minimal|low|medium|high|xhigh|max")
 	fmt.Fprintln(w, "  --provider-opt key=value        provider option, e.g. claude.transport=print|pty|auto")
 	fmt.Fprintln(w, "  --activity-timeout seconds      fail after no provider activity; 0 disables")
 }
@@ -197,7 +201,7 @@ func send(argv []string, stdout io.Writer, stderr io.Writer, stdin io.Reader) in
 		return code
 	}
 	result := dispatch.ExecuteWithOptions(req, dispatch.Options{ProgressWriter: progressWriter(req, stderr)})
-	result = injectFirstRun(result, jsonResult, stderr)
+	result = finalizeAndPersistResult(req, result, jsonResult, stderr)
 	if jsonResult {
 		return writeProviderResult(stdout, result)
 	}
@@ -232,7 +236,7 @@ func resume(argv []string, stdout io.Writer, stderr io.Writer, stdin io.Reader) 
 		return code
 	}
 	result := dispatch.ExecuteWithOptions(req, dispatch.Options{ProgressWriter: progressWriter(req, stderr)})
-	result = injectFirstRun(result, jsonResult, stderr)
+	result = finalizeAndPersistResult(req, result, jsonResult, stderr)
 	if jsonResult {
 		return writeProviderResult(stdout, result)
 	}
@@ -325,6 +329,14 @@ func injectFirstRun(result contract.ProviderResult, jsonResult bool, stderr io.W
 	return result
 }
 
+func finalizeAndPersistResult(req contract.DispatchRequest, result contract.ProviderResult, jsonResult bool, stderr io.Writer) contract.ProviderResult {
+	result = injectFirstRun(result, jsonResult, stderr)
+	if err := runstore.WriteResultWithTask("", "", req.TaskName, result); err != nil {
+		result.Warnings = append(result.Warnings, "runstore write failed: "+err.Error())
+	}
+	return result
+}
+
 func prepareRequest(req *contract.DispatchRequest, stdin io.Reader) error {
 	if req.CWD != "" {
 		info, err := os.Stat(req.CWD)
@@ -392,10 +404,15 @@ func validatePromptFile(prompt string) error {
 }
 
 func parseSend(command string, argv []string, stderr io.Writer) (contract.DispatchRequest, bool, error) {
+	jsonRequested := containsArg(argv, "--json-result")
 	if err := rejectRetiredArgs(argv); err != nil {
-		return contract.DispatchRequest{}, containsArg(argv, "--json-result"), err
+		return contract.DispatchRequest{}, jsonRequested, err
 	}
-	argv = reorderInterspersedFlags(argv)
+	var err error
+	argv, err = reorderInterspersedFlags(argv)
+	if err != nil {
+		return contract.DispatchRequest{}, jsonRequested, err
+	}
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	promptFile := fs.String("prompt-file", "", "read prompt from file")
@@ -413,6 +430,7 @@ func parseSend(command string, argv []string, stderr io.Writer) (contract.Dispat
 	timeoutShort := fs.Int("t", -1, "wall-clock timeout seconds; 0 disables")
 	activityTimeout := fs.Int("activity-timeout", -1, "seconds without provider activity before failure; 0 disables")
 	taskName := fs.String("task-name", "", "task name")
+	effort := fs.String("effort", "", "reasoning effort: auto|none|minimal|low|medium|high|xhigh|max")
 	providerOpts := multiFlag{}
 	fs.Var(&providerOpts, "provider-opt", "provider option, e.g. claude.transport=print|pty|auto")
 	if err := fs.Parse(argv); err != nil {
@@ -432,6 +450,11 @@ func parseSend(command string, argv []string, stderr io.Writer) (contract.Dispat
 		TimeoutSeconds:  defaultFixedTimeoutSeconds(firstNonNegative(*timeout, *timeoutShort)),
 		TaskName:        *taskName,
 	}
+	parsedEffort, err := contract.ParseEffort(*effort)
+	if err != nil {
+		return contract.DispatchRequest{}, *jsonResult, err
+	}
+	req.Effort = parsedEffort
 	parsedProviderOpts, err := parseProviderOpts(providerOpts)
 	if err != nil {
 		return contract.DispatchRequest{}, *jsonResult, err
@@ -450,13 +473,16 @@ func parseSend(command string, argv []string, stderr io.Writer) (contract.Dispat
 			req.Prompt = strings.Join(args[1:], " ")
 		}
 	}
-	req.ActivityTimeoutSeconds = defaultActivityTimeoutSeconds(*activityTimeout, req.Target, req.Model)
+	req.ActivityTimeoutSeconds = defaultActivityTimeoutSeconds(*activityTimeout)
 	return req, *jsonResult, nil
 }
 
 func rejectRetiredArgs(argv []string) error {
 	for i := 0; i < len(argv); i++ {
 		arg := argv[i]
+		if arg == "--" {
+			break
+		}
 		name := arg
 		if before, _, ok := strings.Cut(arg, "="); ok {
 			name = before
@@ -479,22 +505,25 @@ func rejectRetiredArgs(argv []string) error {
 
 func containsArg(argv []string, target string) bool {
 	for _, arg := range argv {
-		if arg == target {
+		if arg == "--" {
+			break
+		}
+		name := arg
+		if before, _, ok := strings.Cut(arg, "="); ok {
+			name = before
+		}
+		if name == target {
 			return true
 		}
 	}
 	return false
 }
 
-func defaultActivityTimeoutSeconds(flagValue int, target string, model string) int {
+func defaultActivityTimeoutSeconds(flagValue int) int {
 	if flagValue >= 0 {
 		return flagValue
 	}
-	resolved, err := routing.Resolve(target, model)
-	if err == nil && resolved.Provider == "opencode" {
-		return 300
-	}
-	return 180
+	return 0
 }
 
 func defaultFixedTimeoutSeconds(flagValue int) int {
@@ -504,11 +533,15 @@ func defaultFixedTimeoutSeconds(flagValue int) int {
 	return 1800
 }
 
-func reorderInterspersedFlags(argv []string) []string {
+func reorderInterspersedFlags(argv []string) ([]string, error) {
 	flags := []string{}
 	positionals := []string{}
 	for i := 0; i < len(argv); i++ {
 		arg := argv[i]
+		if arg == "--" {
+			positionals = append(positionals, argv[i+1:]...)
+			return append(append(flags, "--"), positionals...), nil
+		}
 		if isBoolFlag(arg) {
 			flags = append(flags, arg)
 			continue
@@ -521,14 +554,21 @@ func reorderInterspersedFlags(argv []string) []string {
 			}
 			continue
 		}
+		if strings.HasPrefix(arg, "-") && arg != "-" {
+			return nil, fmt.Errorf("unknown flag: %s", arg)
+		}
 		positionals = append(positionals, arg)
 	}
-	return append(flags, positionals...)
+	return append(flags, positionals...), nil
 }
 
 func isBoolFlag(arg string) bool {
-	switch arg {
-	case "--json-result", "--stream-progress":
+	name := arg
+	if before, _, ok := strings.Cut(arg, "="); ok {
+		name = before
+	}
+	switch name {
+	case "--json-result", "--stream-progress", "--help", "-h":
 		return true
 	default:
 		return false
@@ -543,7 +583,7 @@ func isValueFlag(arg string) bool {
 	switch name {
 	case "--prompt-file", "--output-file", "-o", "--model", "-m", "--cwd",
 		"--target", "--session-id", "--session-provider", "--timeout", "-t",
-		"--activity-timeout", "--task-name", "--provider-opt", "--format":
+		"--activity-timeout", "--task-name", "--effort", "--provider-opt", "--format":
 		return true
 	default:
 		return false
@@ -572,6 +612,10 @@ func parseProviderOpts(values []string) (map[string]map[string]string, error) {
 		if !ok || provider == "" || key == "" {
 			return nil, fmt.Errorf("--provider-opt must use provider.key=value")
 		}
+		// Retired options must return a migration message before the generic whitelist error.
+		if provider == "grok" && key == "effort" {
+			return nil, fmt.Errorf("grok.effort was removed; use --effort")
+		}
 		if !validProviderOpt(provider, key) {
 			return nil, fmt.Errorf("unsupported provider option %s.%s", provider, key)
 		}
@@ -593,7 +637,7 @@ func validProviderOpt(provider string, key string) bool {
 		return key == "bin" || key == "root"
 	case "grok":
 		switch key {
-		case "approval", "max-turns", "effort", "web-search", "subagents":
+		case "approval", "max-turns", "web-search", "subagents":
 			return true
 		default:
 			return false

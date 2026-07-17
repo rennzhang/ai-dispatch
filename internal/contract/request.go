@@ -15,5 +15,6 @@ type DispatchRequest struct {
 	TimeoutSeconds         int                          `json:"timeout_seconds"`
 	ActivityTimeoutSeconds int                          `json:"activity_timeout_seconds"`
 	TaskName               string                       `json:"task_name,omitempty"`
+	Effort                 Effort                       `json:"effort,omitempty"`
 	ProviderOpts           map[string]map[string]string `json:"provider_opts,omitempty"`
 }

@@ -47,11 +47,13 @@ type CostInfo struct {
 }
 
 type RouteStep struct {
-	Provider   string `json:"provider"`
-	Model      string `json:"model,omitempty"`
-	Status     Status `json:"status"`
-	Reason     string `json:"reason,omitempty"`
-	DurationMS int64  `json:"duration_ms"`
+	Provider             string `json:"provider"`
+	Model                string `json:"model,omitempty"`
+	Status               Status `json:"status"`
+	Reason               string `json:"reason,omitempty"`
+	DurationMS           int64  `json:"duration_ms"`
+	AppliedEffort        Effort `json:"applied_effort,omitempty"`
+	EffortFallbackReason string `json:"effort_fallback_reason,omitempty"`
 }
 
 // ProviderSetupSummary is a redacted view of a single provider's status,
@@ -78,30 +80,33 @@ type FirstRunSetupInfo struct {
 }
 
 type ProviderResult struct {
-	SchemaVersion   string             `json:"schema_version"`
-	OK              bool               `json:"ok"`
-	Status          Status             `json:"status"`
-	Text            string             `json:"text,omitempty"`
-	ProviderUsed    string             `json:"provider_used"`
-	ModelUsed       string             `json:"model_used,omitempty"`
-	SessionID       string             `json:"session_id,omitempty"`
-	RequestedTarget string             `json:"requested_target,omitempty"`
-	RouteTrace      []string           `json:"route_trace"`
-	RouteSteps      []RouteStep        `json:"route_steps"`
-	Degraded        bool               `json:"degraded"`
-	DegradeReason   string             `json:"degrade_reason,omitempty"`
-	Usage           *UsageInfo         `json:"usage,omitempty"`
-	Cost            *CostInfo          `json:"cost,omitempty"`
-	ExitCode        int                `json:"exit_code"`
-	DurationMS      int64              `json:"duration_ms"`
-	Stderr          string             `json:"stderr"`
-	Warnings        []string           `json:"warnings"`
-	OutputFile      string             `json:"output_file,omitempty"`
-	NextAction      NextAction         `json:"next_action"`
-	FailureClass    *FailureClass      `json:"failure_class"`
-	FirstRun        bool               `json:"first_run,omitempty"`
-	FirstRunHint    string             `json:"first_run_hint,omitempty"`
-	FirstRunSetup   *FirstRunSetupInfo `json:"first_run_setup,omitempty"`
+	SchemaVersion        string             `json:"schema_version"`
+	OK                   bool               `json:"ok"`
+	Status               Status             `json:"status"`
+	Text                 string             `json:"text,omitempty"`
+	ProviderUsed         string             `json:"provider_used"`
+	ModelUsed            string             `json:"model_used,omitempty"`
+	SessionID            string             `json:"session_id,omitempty"`
+	RequestedTarget      string             `json:"requested_target,omitempty"`
+	RouteTrace           []string           `json:"route_trace"`
+	RouteSteps           []RouteStep        `json:"route_steps"`
+	Degraded             bool               `json:"degraded"`
+	DegradeReason        string             `json:"degrade_reason,omitempty"`
+	RequestedEffort      Effort             `json:"requested_effort,omitempty"`
+	AppliedEffort        Effort             `json:"applied_effort,omitempty"`
+	EffortFallbackReason string             `json:"effort_fallback_reason,omitempty"`
+	Usage                *UsageInfo         `json:"usage,omitempty"`
+	Cost                 *CostInfo          `json:"cost,omitempty"`
+	ExitCode             int                `json:"exit_code"`
+	DurationMS           int64              `json:"duration_ms"`
+	Stderr               string             `json:"stderr"`
+	Warnings             []string           `json:"warnings"`
+	OutputFile           string             `json:"output_file,omitempty"`
+	NextAction           NextAction         `json:"next_action"`
+	FailureClass         *FailureClass      `json:"failure_class"`
+	FirstRun             bool               `json:"first_run,omitempty"`
+	FirstRunHint         string             `json:"first_run_hint,omitempty"`
+	FirstRunSetup        *FirstRunSetupInfo `json:"first_run_setup,omitempty"`
 }
 
 func SuccessResult(text string) ProviderResult {

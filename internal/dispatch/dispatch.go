@@ -2,9 +2,11 @@ package dispatch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
 	"time"
 
@@ -24,6 +26,7 @@ import (
 
 type Options struct {
 	ProgressWriter io.Writer
+	Context        context.Context
 }
 
 func Execute(req contract.DispatchRequest) contract.ProviderResult {
@@ -31,18 +34,40 @@ func Execute(req contract.DispatchRequest) contract.ProviderResult {
 }
 
 func ExecuteWithOptions(req contract.DispatchRequest, opts Options) contract.ProviderResult {
+	dispatchStarted := time.Now()
+	// Normalize empty effort at the shared entry so CLI and programmatic callers share one contract.
+	req.Effort = contract.NormalizeEffort(req.Effort)
+
+	baseCtx := opts.Context
+	stopSignals := func() {}
+	if baseCtx == nil {
+		baseCtx, stopSignals = signal.NotifyContext(context.Background(), dispatchSignals()...)
+	}
+	defer stopSignals()
+	dispatchCtx := baseCtx
+	stopTimeout := func() {}
+	if req.TimeoutSeconds > 0 {
+		dispatchCtx, stopTimeout = context.WithTimeout(baseCtx, seconds(req.TimeoutSeconds))
+	}
+	defer stopTimeout()
+
 	target, err := resolveTarget(req)
 	if err != nil {
-		return contract.ErrorResult(contract.StatusError, contract.FailureInput, err.Error(), 2)
+		return completeDispatchResult(req, opts, contract.ErrorResult(contract.StatusError, contract.FailureInput, err.Error(), 2))
+	}
+	if result, done := contextTargetResult(dispatchCtx, target, elapsedMS(dispatchStarted)); done {
+		return completeDispatchResult(req, opts, result)
 	}
 	if os.Getenv("AI_DISPATCH_GO_PROVIDER_EXECUTION") != "on" {
 		result := contract.ErrorResult(contract.StatusDisabled, contract.FailureConfig, "go provider execution is disabled; set AI_DISPATCH_GO_PROVIDER_EXECUTION=on for explicit smoke", 3)
 		result.RequestedTarget = target.Requested
 		result.ProviderUsed = target.Provider
+		resolution := providers.EffortAuto(req.Effort, target.Model)
 		ensureRouteMetadata(&result, target, 0)
-		return result
+		applyEffortResolution(&result, resolution)
+		return completeDispatchResult(req, opts, result)
 	}
-	result := executeCandidates(req, target, opts)
+	result := executeCandidates(dispatchCtx, req, target, opts)
 	if req.OutputFile != "" && result.OK {
 		if err := output.WriteFile(req.OutputFile, result); err != nil {
 			failure := contract.FailureRuntime
@@ -56,38 +81,113 @@ func ExecuteWithOptions(req contract.DispatchRequest, opts Options) contract.Pro
 			result.OutputFile = req.OutputFile
 		}
 	}
-	if err := runstore.WriteResultWithTask("", "", req.TaskName, result); err != nil {
-		result.Warnings = append(result.Warnings, "runstore write failed: "+err.Error())
+	return completeDispatchResult(req, opts, result)
+}
+
+func completeDispatchResult(req contract.DispatchRequest, opts Options, result contract.ProviderResult) contract.ProviderResult {
+	if result.RequestedEffort == "" {
+		result.RequestedEffort = contract.NormalizeEffort(req.Effort)
+	}
+	if result.AppliedEffort == "" {
+		result.AppliedEffort = contract.EffortAuto
+	}
+	// Fill empty route-step effort only. Candidate-level values already stamped
+	// by executeTarget must be preserved across multi-candidate merges.
+	for i := range result.RouteSteps {
+		if result.RouteSteps[i].AppliedEffort == "" {
+			result.RouteSteps[i].AppliedEffort = result.AppliedEffort
+			if result.RouteSteps[i].EffortFallbackReason == "" {
+				result.RouteSteps[i].EffortFallbackReason = result.EffortFallbackReason
+			}
+		}
+	}
+	if !req.StreamProgress || opts.ProgressWriter == nil {
+		return result
+	}
+	emitter := progress.NewEmitter(result.ProviderUsed, opts.ProgressWriter)
+	if result.OK {
+		emitter.Emit(contract.ProgressDone, "done", "completed")
+	} else {
+		emitter.Emit(contract.ProgressError, "error", result.Stderr)
 	}
 	return result
 }
 
-func executeCandidates(req contract.DispatchRequest, target routing.DispatchTarget, opts Options) contract.ProviderResult {
+func executeCandidates(ctx context.Context, req contract.DispatchRequest, target routing.DispatchTarget, opts Options) contract.ProviderResult {
+	return executeCandidatesWith(ctx, req, target, opts, executeTarget)
+}
+
+type targetExecutor func(context.Context, contract.DispatchRequest, routing.DispatchTarget, Options) contract.ProviderResult
+
+func executeCandidatesWith(ctx context.Context, req contract.DispatchRequest, target routing.DispatchTarget, opts Options, execute targetExecutor) contract.ProviderResult {
 	candidates := routing.CandidateTargets(target)
 	var routeTrace []string
 	var routeSteps []contract.RouteStep
 	var degradeReasons []string
+	var routeWarnings []string
+	var lastResult contract.ProviderResult
+	var lastCandidate routing.DispatchTarget
+	lastRouteStepStart := 0
+	haveLastResult := false
+	pendingDegradeReason := ""
 	for i, candidate := range candidates {
+		if ctx.Err() != nil && haveLastResult {
+			switch {
+			case errors.Is(ctx.Err(), context.Canceled):
+				applyCanceledContract(&lastResult, lastCandidate, lastResult.DurationMS)
+			case errors.Is(ctx.Err(), context.DeadlineExceeded):
+				applyTimeoutContract(&lastResult, lastCandidate, lastResult.DurationMS)
+			}
+			routeSteps = append(routeSteps[:lastRouteStepStart], lastResult.RouteSteps...)
+			return finalizeCandidateResult(lastResult, target.Requested, routeTrace, routeSteps, degradeReasons, routeWarnings)
+		}
+		if result, done := contextTargetResult(ctx, candidate, 0); done {
+			routeTrace = append(routeTrace, result.RouteTrace...)
+			routeSteps = append(routeSteps, result.RouteSteps...)
+			return finalizeCandidateResult(result, target.Requested, routeTrace, routeSteps, degradeReasons, routeWarnings)
+		}
+		if pendingDegradeReason != "" {
+			degradeReasons = append(degradeReasons, pendingDegradeReason)
+			pendingDegradeReason = ""
+		}
 		attemptReq := req
 		if i > 0 {
 			attemptReq.SessionID = ""
 			attemptReq.SessionProvider = ""
 		}
-		result := executeTarget(attemptReq, candidate, opts)
+		attemptStarted := time.Now()
+		result := execute(ctx, attemptReq, candidate, opts)
+		attemptDuration := maxDurationMS(result.DurationMS, elapsedMS(attemptStarted))
+		switch {
+		case errors.Is(ctx.Err(), context.Canceled):
+			applyCanceledContract(&result, candidate, attemptDuration)
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
+			applyTimeoutContract(&result, candidate, attemptDuration)
+		}
 		routeTrace = append(routeTrace, result.RouteTrace...)
+		lastRouteStepStart = len(routeSteps)
 		routeSteps = append(routeSteps, result.RouteSteps...)
+		for _, warning := range result.Warnings {
+			routeWarnings = appendUnique(routeWarnings, warning)
+		}
+		if ctx.Err() != nil {
+			return finalizeCandidateResult(result, target.Requested, routeTrace, routeSteps, degradeReasons, routeWarnings)
+		}
 		if result.OK {
-			return finalizeCandidateResult(result, target.Requested, routeTrace, routeSteps, degradeReasons)
+			return finalizeCandidateResult(result, target.Requested, routeTrace, routeSteps, degradeReasons, routeWarnings)
 		}
 		if i == len(candidates)-1 || !shouldTryNextCandidate(req, result) {
-			return finalizeCandidateResult(result, target.Requested, routeTrace, routeSteps, degradeReasons)
+			return finalizeCandidateResult(result, target.Requested, routeTrace, routeSteps, degradeReasons, routeWarnings)
 		}
-		degradeReasons = append(degradeReasons, degradeReason(result, candidates[i+1]))
+		lastResult = result
+		lastCandidate = candidate
+		haveLastResult = true
+		pendingDegradeReason = degradeReason(result, candidates[i+1])
 	}
 	return contract.ErrorResult(contract.StatusError, contract.FailureConfig, "no route candidates available", 2)
 }
 
-func finalizeCandidateResult(result contract.ProviderResult, requested string, routeTrace []string, routeSteps []contract.RouteStep, degradeReasons []string) contract.ProviderResult {
+func finalizeCandidateResult(result contract.ProviderResult, requested string, routeTrace []string, routeSteps []contract.RouteStep, degradeReasons []string, routeWarnings []string) contract.ProviderResult {
 	if requested != "" {
 		result.RequestedTarget = requested
 	}
@@ -97,32 +197,54 @@ func finalizeCandidateResult(result contract.ProviderResult, requested string, r
 	if len(routeSteps) > 0 {
 		result.RouteSteps = routeSteps
 	}
+	result.Warnings = append([]string{}, routeWarnings...)
 	if len(degradeReasons) > 0 {
 		reason := strings.Join(degradeReasons, "; ")
 		result.Degraded = true
 		result.DegradeReason = reason
-		result.Warnings = append([]string{reason}, result.Warnings...)
+		if !containsExact(result.Warnings, reason) {
+			result.Warnings = append([]string{reason}, result.Warnings...)
+		}
 	}
 	return result
 }
 
-func executeTarget(req contract.DispatchRequest, target routing.DispatchTarget, opts Options) contract.ProviderResult {
+func executeTarget(baseCtx context.Context, req contract.DispatchRequest, target routing.DispatchTarget, opts Options) contract.ProviderResult {
+	targetStarted := time.Now()
 	p, ok := providerFor(target.Provider)
 	if !ok {
 		result := contract.ErrorResult(contract.StatusDisabled, contract.FailureConfig, "provider is not implemented in go runtime: "+target.Provider, 3)
 		result.RequestedTarget = target.Requested
 		result.ProviderUsed = target.Provider
 		ensureRouteMetadata(&result, target, 0)
+		applyEffortResolution(&result, providers.EffortAuto(req.Effort, target.Model))
 		return result
 	}
+	if result, done := contextTargetResult(baseCtx, target, elapsedMS(targetStarted)); done {
+		applyEffortResolution(&result, providers.EffortAuto(req.Effort, target.Model))
+		return result
+	}
+
+	// Capability queries are bounded so effort resolution cannot stall execution.
+	effortCtx, cancelEffort := context.WithTimeout(baseCtx, 5*time.Second)
+	resolution := p.ResolveEffort(effortCtx, providers.EffortRequest{
+		Model:           target.Model,
+		Requested:       req.Effort,
+		ProviderOptions: req.ProviderOpts[target.Provider],
+	})
+	cancelEffort()
+
+	buildTarget := target
+	buildTarget.Model = resolution.AppliedModel
 	buildReq := providers.BuildRequest{
 		Prompt:                 req.Prompt,
 		PromptFile:             req.PromptFile,
-		Target:                 target,
+		Target:                 buildTarget,
 		CWD:                    req.CWD,
 		SessionID:              req.SessionID,
 		TimeoutSeconds:         req.TimeoutSeconds,
 		ActivityTimeoutSeconds: req.ActivityTimeoutSeconds,
+		Effort:                 resolution.Applied,
 		ProviderOptions:        req.ProviderOpts[target.Provider],
 	}
 	spec, err := p.Build(buildReq)
@@ -131,7 +253,12 @@ func executeTarget(req contract.DispatchRequest, target routing.DispatchTarget, 
 		result := contract.ErrorResult(contract.StatusError, failure, err.Error(), exitCode)
 		result.RequestedTarget = target.Requested
 		result.ProviderUsed = target.Provider
-		ensureRouteMetadata(&result, target, 0)
+		ensureRouteMetadata(&result, buildTarget, 0)
+		applyEffortResolution(&result, resolution)
+		return result
+	}
+	if result, done := contextTargetResult(baseCtx, buildTarget, elapsedMS(targetStarted)); done {
+		applyEffortResolution(&result, resolution)
 		return result
 	}
 	spec.CWD = req.CWD
@@ -140,36 +267,176 @@ func executeTarget(req contract.DispatchRequest, target routing.DispatchTarget, 
 	if req.StreamProgress && opts.ProgressWriter != nil {
 		emitter = progress.NewEmitter(target.Provider, opts.ProgressWriter)
 		emitter.Emit(contract.ProgressSession, "session", target.Provider+" session started")
-		hooks.Stdout = emitter.Feed
-		hooks.Stderr = emitter.Feed
+		hooks.Stdout = emitter.FeedStdout
+		hooks.Stderr = emitter.FeedStderr
 	}
-	ctx := context.Background()
-	var cancel context.CancelFunc
-	if req.TimeoutSeconds > 0 {
-		ctx, cancel = context.WithTimeout(ctx, seconds(req.TimeoutSeconds))
-	} else {
-		ctx, cancel = context.WithCancel(ctx)
-	}
-	defer cancel()
-	run := withProviderExecutionLock(ctx, target.Provider, func() execruntime.RunResult {
-		return execruntime.RunProcess(ctx, spec, execruntime.RunOptions{
-			FixedTimeout:    seconds(req.TimeoutSeconds),
+	run := withProviderExecutionLock(baseCtx, target.Provider, func() execruntime.RunResult {
+		return execruntime.RunProcess(baseCtx, spec, execruntime.RunOptions{
+			FixedTimeout:    0,
 			ActivityTimeout: seconds(req.ActivityTimeoutSeconds),
 		}, hooks)
 	})
 	if emitter != nil {
 		emitter.Close()
 	}
+	return providerResultFromRun(p, run, buildReq, buildTarget, resolution)
+}
+
+func providerResultFromRun(p providers.Provider, run execruntime.RunResult, buildReq providers.BuildRequest, target routing.DispatchTarget, resolution providers.EffortResolution) contract.ProviderResult {
 	result := p.Parse(run, buildReq)
 	ensureRouteMetadata(&result, target, run.DurationMS)
-	if emitter != nil {
-		if result.OK {
-			emitter.Emit(contract.ProgressDone, "done", "completed")
+	applyEffortResolution(&result, resolution)
+	if run.Canceled {
+		applyCanceledContract(&result, target, run.DurationMS)
+		// Preserve effort fields after cancel rewrite.
+		applyEffortResolution(&result, resolution)
+	}
+	applyRuntimeWarnings(&result, run)
+	return result
+}
+
+func applyCanceledContract(result *contract.ProviderResult, target routing.DispatchTarget, durationMS int64) {
+	if result.SchemaVersion == "" {
+		result.SchemaVersion = "2.0"
+	}
+	result.OK = false
+	result.Status = contract.StatusError
+	result.ExitCode = 130
+	result.DurationMS = durationMS
+	result.Stderr = "dispatch canceled"
+	result.NextAction = contract.NextDone
+	result.FailureClass = nil
+	if result.Warnings == nil {
+		result.Warnings = []string{}
+	}
+	ensureRouteMetadata(result, target, durationMS)
+	for i := range result.RouteSteps {
+		result.RouteSteps[i].Status = contract.StatusError
+		result.RouteSteps[i].DurationMS = durationMS
+	}
+}
+
+// applyEffortResolution stamps top-level and route-step effort fields owned by dispatch.
+// Effort fallback never sets degraded; that remains routing-only.
+func applyEffortResolution(result *contract.ProviderResult, resolution providers.EffortResolution) {
+	result.RequestedEffort = contract.NormalizeEffort(resolution.Requested)
+	result.AppliedEffort = contract.NormalizeEffort(resolution.Applied)
+	if resolution.Fallback {
+		result.EffortFallbackReason = resolution.Reason
+	} else {
+		result.EffortFallbackReason = ""
+	}
+	for i := range result.RouteSteps {
+		result.RouteSteps[i].AppliedEffort = result.AppliedEffort
+		if resolution.Fallback {
+			result.RouteSteps[i].EffortFallbackReason = resolution.Reason
 		} else {
-			emitter.Emit(contract.ProgressError, "error", result.Stderr)
+			result.RouteSteps[i].EffortFallbackReason = ""
 		}
 	}
+}
+
+func applyRuntimeWarnings(result *contract.ProviderResult, run execruntime.RunResult) {
+	if run.CleanupError != "" || (run.CleanupAttempted && !run.CleanupComplete) {
+		warning := "runtime_cleanup=incomplete"
+		if detail := compactWarningDetail(run.CleanupError); detail != "" {
+			warning += " error=" + detail
+		}
+		appendWarning(result, warning)
+	}
+	if run.StdoutTruncated || run.StdoutDroppedBytes > 0 {
+		appendWarning(result, fmt.Sprintf("runtime_stdout_truncated=true dropped_bytes=%d", run.StdoutDroppedBytes))
+	}
+	if run.StderrTruncated || run.StderrDroppedBytes > 0 {
+		appendWarning(result, fmt.Sprintf("runtime_stderr_truncated=true dropped_bytes=%d", run.StderrDroppedBytes))
+	}
+}
+
+func appendWarning(result *contract.ProviderResult, warning string) {
+	result.Warnings = appendUnique(result.Warnings, warning)
+}
+
+func appendUnique(values []string, value string) []string {
+	if containsExact(values, value) {
+		return values
+	}
+	return append(values, value)
+}
+
+func containsExact(values []string, value string) bool {
+	for _, existing := range values {
+		if existing == value {
+			return true
+		}
+	}
+	return false
+}
+
+func compactWarningDetail(value string) string {
+	runes := []rune(strings.Join(strings.Fields(value), " "))
+	if len(runes) > 240 {
+		runes = runes[:240]
+	}
+	return string(runes)
+}
+
+func canceledTargetResult(target routing.DispatchTarget, durationMS int64) contract.ProviderResult {
+	result := contract.ProviderResult{
+		SchemaVersion: "2.0",
+		OK:            false,
+		Status:        contract.StatusError,
+		ExitCode:      130,
+		DurationMS:    durationMS,
+		Stderr:        "dispatch canceled",
+		Warnings:      []string{},
+		NextAction:    contract.NextDone,
+	}
+	ensureRouteMetadata(&result, target, durationMS)
 	return result
+}
+
+func timeoutTargetResult(target routing.DispatchTarget, durationMS int64) contract.ProviderResult {
+	result := contract.ProviderResult{}
+	applyTimeoutContract(&result, target, durationMS)
+	return result
+}
+
+func applyTimeoutContract(result *contract.ProviderResult, target routing.DispatchTarget, durationMS int64) {
+	if result.SchemaVersion == "" {
+		result.SchemaVersion = "2.0"
+	}
+	failure := contract.FailureTimeout
+	result.OK = false
+	result.Status = contract.StatusTimeout
+	result.ExitCode = 124
+	result.DurationMS = durationMS
+	if strings.TrimSpace(result.Stderr) == "" {
+		result.Stderr = "dispatch timeout exceeded"
+	}
+	result.NextAction = contract.NextRetry
+	result.FailureClass = &failure
+	if result.Warnings == nil {
+		result.Warnings = []string{}
+	}
+	ensureRouteMetadata(result, target, durationMS)
+	for i := range result.RouteSteps {
+		result.RouteSteps[i].Status = contract.StatusTimeout
+		result.RouteSteps[i].DurationMS = durationMS
+	}
+}
+
+func contextTargetResult(ctx context.Context, target routing.DispatchTarget, durationMS int64) (contract.ProviderResult, bool) {
+	if ctx == nil {
+		return contract.ProviderResult{}, false
+	}
+	switch {
+	case errors.Is(ctx.Err(), context.Canceled):
+		return canceledTargetResult(target, durationMS), true
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return timeoutTargetResult(target, durationMS), true
+	default:
+		return contract.ProviderResult{}, false
+	}
 }
 
 func shouldTryNextCandidate(req contract.DispatchRequest, result contract.ProviderResult) bool {
@@ -312,6 +579,15 @@ func ensureRouteMetadata(result *contract.ProviderResult, target routing.Dispatc
 			DurationMS: durationMS,
 		}}
 	}
+	// Keep route-step effort aligned with top-level when steps are created late.
+	if result.AppliedEffort != "" {
+		for i := range result.RouteSteps {
+			if result.RouteSteps[i].AppliedEffort == "" {
+				result.RouteSteps[i].AppliedEffort = result.AppliedEffort
+				result.RouteSteps[i].EffortFallbackReason = result.EffortFallbackReason
+			}
+		}
+	}
 }
 
 func firstNonEmpty(values ...string) string {
@@ -328,4 +604,18 @@ func seconds(value int) time.Duration {
 		return 0
 	}
 	return time.Duration(value) * time.Second
+}
+
+func elapsedMS(started time.Time) int64 {
+	return time.Since(started).Milliseconds()
+}
+
+func maxDurationMS(values ...int64) int64 {
+	var maximum int64
+	for _, value := range values {
+		if value > maximum {
+			maximum = value
+		}
+	}
+	return maximum
 }

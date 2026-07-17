@@ -39,6 +39,33 @@ func TestResolveBuiltinAlias(t *testing.T) {
 	}
 }
 
+func TestResolveGPT56SolAndTerraRegistryTargets(t *testing.T) {
+	isolateConfig(t)
+	cases := []struct {
+		target string
+		model  string
+	}{
+		{target: "gpt5.6", model: "gpt-5.6-sol"},
+		{target: "gpt5.6-terra", model: "gpt-5.6-terra"},
+	}
+	for _, tc := range cases {
+		got, err := Resolve(tc.target, "")
+		if err != nil {
+			t.Fatalf("Resolve(%q): %v", tc.target, err)
+		}
+		if got.Provider != "codex" || got.Model != tc.model || got.Source != "registry" {
+			t.Fatalf("Resolve(%q)=%+v want provider=codex model=%s source=registry", tc.target, got, tc.model)
+		}
+	}
+	alias, err := Resolve("gpt-5.6", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alias.Provider != "codex" || alias.Model != "gpt-5.6-sol" || alias.Source != "registry" {
+		t.Fatalf("gpt-5.6 alias=%+v", alias)
+	}
+}
+
 func TestRejectModelWithModelTarget(t *testing.T) {
 	isolateConfig(t)
 	if _, err := Resolve("gpt-5.5", "other"); err == nil {
@@ -105,6 +132,30 @@ func TestResolveProviderExplicitActualModelIDPreservesModel(t *testing.T) {
 	}
 	if target.Provider != "claude" || target.Model != "claude-opus-4-7" || target.Source != "provider" || target.ModelKey != "opus4.7" {
 		t.Fatalf("target=%+v", target)
+	}
+}
+
+func TestResolveRejectsRegistryAliasOwnedByAnotherProvider(t *testing.T) {
+	isolateConfig(t)
+	cases := []struct {
+		provider string
+		model    string
+	}{
+		{provider: "codex", model: "opus"},
+		{provider: "claude", model: "gpt5.5"},
+		{provider: "opencode", model: "sonnet"},
+		{provider: "antigravity", model: "grok-fast"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.provider+"_"+tc.model, func(t *testing.T) {
+			target, err := Resolve(tc.provider, tc.model)
+			if err == nil {
+				t.Fatalf("expected provider mismatch, target=%+v", target)
+			}
+			if target.Provider != "" || target.Model != "" || target.ModelKey != "" || target.ActualID != "" || len(target.Candidates) != 0 {
+				t.Fatalf("mismatch must not return cross-provider metadata: %+v", target)
+			}
+		})
 	}
 }
 

@@ -20,7 +20,10 @@ const (
 	ProgressError        ProgressKind = "error"
 )
 
-const DefaultProgressDirective = "BUSY -- do not interrupt; wait for output_file or final result."
+const (
+	DefaultProgressDirective         = "BUSY -- do not interrupt; wait for output_file or final result."
+	DefaultTerminalProgressDirective = "TERMINAL -- dispatch finished; use the final result."
+)
 
 type ProgressEvent struct {
 	Progress      bool         `json:"_progress"`
@@ -36,7 +39,7 @@ type ProgressEvent struct {
 }
 
 func NewProgress(kind ProgressKind, name string, summary string) ProgressEvent {
-	return ProgressEvent{
+	event := ProgressEvent{
 		Progress:      true,
 		SchemaVersion: "2.0",
 		Kind:          kind,
@@ -45,4 +48,9 @@ func NewProgress(kind ProgressKind, name string, summary string) ProgressEvent {
 		NextAction:    "wait",
 		Directive:     DefaultProgressDirective,
 	}
+	if kind == ProgressDone || kind == ProgressError {
+		event.NextAction = "done"
+		event.Directive = DefaultTerminalProgressDirective
+	}
+	return event
 }

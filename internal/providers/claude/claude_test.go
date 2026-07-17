@@ -1,12 +1,15 @@
 package claude
 
 import (
+	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/rennzhang/ai-dispatch/internal/contract"
 	"github.com/rennzhang/ai-dispatch/internal/providers"
 	"github.com/rennzhang/ai-dispatch/internal/routing"
 	"github.com/rennzhang/ai-dispatch/internal/runtime"
@@ -34,6 +37,63 @@ func TestBuildClaudeAPIArgs(t *testing.T) {
 	}
 	if len(spec.Stdin) != 0 {
 		t.Fatalf("stdin=%q", spec.Stdin)
+	}
+	if strings.Contains(strings.Join(spec.Args, "\x00"), "--effort") {
+		t.Fatalf("auto effort must not pass --effort: %#v", spec.Args)
+	}
+}
+
+func TestBuildClaudePrintAndPTYNeverPassEffort(t *testing.T) {
+	target := routing.DispatchTarget{Requested: "claude", Provider: "claude", Model: "sonnet"}
+	printSpec, err := Provider{}.Build(providers.BuildRequest{
+		Prompt:          "hello",
+		Target:          target,
+		Effort:          contract.EffortLow,
+		ProviderOptions: map[string]string{"transport": "api"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(printSpec.Args, "\x00"), "--effort") {
+		t.Fatalf("print must never pass --effort: %#v", printSpec.Args)
+	}
+	t.Setenv("AI_DISPATCH_CLAUDE_PTY_GO_DRIVER", "go-pty-driver-test")
+	ptySpec, err := Provider{}.Build(providers.BuildRequest{
+		Prompt:          "hello",
+		Target:          target,
+		Effort:          contract.EffortHigh,
+		ProviderOptions: map[string]string{"transport": "pty"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(ptySpec.Args, "\x00"), "--effort") {
+		t.Fatalf("pty must never pass --effort: %#v", ptySpec.Args)
+	}
+}
+
+func TestResolveClaudeEffortAlwaysFallsBackUntilCLIVerified(t *testing.T) {
+	p := Provider{}
+	auto := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "opus", Requested: contract.EffortAuto})
+	if auto.Applied != contract.EffortAuto || auto.Fallback || auto.AppliedModel != "opus" {
+		t.Fatalf("auto=%+v", auto)
+	}
+	for _, level := range []contract.Effort{
+		contract.EffortNone, contract.EffortMinimal, contract.EffortLow,
+		contract.EffortMedium, contract.EffortHigh, contract.EffortXHigh, contract.EffortMax,
+	} {
+		for _, model := range []string{"opus", "sonnet", "claude-opus-4-7", ""} {
+			got := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: model, Requested: level})
+			if got.Applied != contract.EffortAuto || !got.Fallback {
+				t.Fatalf("model %q level %s must fall back to auto: %+v", model, level, got)
+			}
+			if !strings.Contains(got.Reason, "Claude Code CLI") {
+				t.Fatalf("reason must mention Claude Code CLI: %q", got.Reason)
+			}
+			if got.AppliedModel != model {
+				t.Fatalf("applied model changed: %+v", got)
+			}
+		}
 	}
 }
 
@@ -121,6 +181,7 @@ func TestBuildClaudePTYArgs(t *testing.T) {
 		"--transport\x00tmux",
 		"--cwd\x00/tmp/work",
 		"--timeout\x0040",
+		"--session-id\x00sess-1",
 		"--input\x00hello",
 		"--\x00env\x00CLAUDE_SESSION_ID=sess-1\x00AI_DISPATCH_CLAUDE_SESSION_ID=sess-1\x00claude",
 		"--resume\x00sess-1",
@@ -133,6 +194,41 @@ func TestBuildClaudePTYArgs(t *testing.T) {
 	if !containsEnv(spec.Env, "CLAUDE_SESSION_ID=sess-1") ||
 		!containsEnv(spec.Env, "AI_DISPATCH_CLAUDE_SESSION_ID=sess-1") {
 		t.Fatalf("env=%#v", spec.Env)
+	}
+}
+
+func TestBuildClaudePTYPromptFileAndUnlimitedTimeout(t *testing.T) {
+	t.Setenv("AI_DISPATCH_CLAUDE_PTY_GO_DRIVER", "go-pty-driver-test")
+	promptFile := filepath.Join(t.TempDir(), "prompt.md")
+	if err := os.WriteFile(promptFile, []byte("prompt from file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	spec, err := Provider{}.Build(providers.BuildRequest{
+		PromptFile:      promptFile,
+		Target:          routing.DispatchTarget{Requested: "claude", Provider: "claude", Model: "sonnet"},
+		TimeoutSeconds:  0,
+		ProviderOptions: map[string]string{"transport": "pty"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsArgPair(spec.Args, "--input-file", promptFile) {
+		t.Fatalf("missing prompt file: %#v", spec.Args)
+	}
+	if !containsArgPair(spec.Args, "--timeout", "0") {
+		t.Fatalf("timeout=0 must reach driver unchanged: %#v", spec.Args)
+	}
+	sessionIDs := argValues(spec.Args, "--session-id")
+	if len(sessionIDs) != 2 || sessionIDs[0] == "" || sessionIDs[0] != sessionIDs[1] {
+		t.Fatalf("generated session id must match in driver and Claude command: %#v", spec.Args)
+	}
+	sessionID := sessionIDs[0]
+	if !strings.Contains(strings.Join(spec.Args, "\x00"), "--\x00env\x00CLAUDE_SESSION_ID="+sessionID+"\x00AI_DISPATCH_CLAUDE_SESSION_ID="+sessionID+"\x00claude") ||
+		!strings.Contains(strings.Join(spec.Args, "\x00"), "--session-id\x00"+sessionID) {
+		t.Fatalf("generated session id not pinned in Claude command: %#v", spec.Args)
+	}
+	if strings.Contains(strings.Join(spec.Args, "\x00"), "prompt from file") {
+		t.Fatalf("prompt leaked into argv: %#v", spec.Args)
 	}
 }
 
@@ -353,6 +449,116 @@ func TestIsClaudePTYSessionName(t *testing.T) {
 	}
 }
 
+func TestClaudePTYUnlimitedRunCleansTmuxOnCancellation(t *testing.T) {
+	root := t.TempDir()
+	logPath := filepath.Join(root, "tmux.log")
+	writeFakeTmux(t, root)
+	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE_TMUX_LOG", logPath)
+	t.Setenv("AI_DISPATCH_CLAUDE_PTY_SESSION_TTL_SECONDS", "0")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	var stdout bytes.Buffer
+	go func() {
+		done <- runGoPTYDriverContext(ctx, ptyDriverConfig{
+			CWD:                 root,
+			Timeout:             0,
+			Input:               "hello",
+			SessionID:           "11111111-1111-4111-8111-111111111111",
+			ClaudeBaseDir:       filepath.Join(root, ".claude"),
+			StartupWait:         0,
+			StartupReadyPattern: "❯",
+			Command:             []string{"fake-claude"},
+		}, &stdout, &bytes.Buffer{})
+	}()
+	waitForFileContains(t, logPath, "new-session", 2*time.Second)
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "canceled") {
+			t.Fatalf("err=%v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("PTY driver did not stop after cancellation")
+	}
+	waitForFileContains(t, logPath, "kill-session", 2*time.Second)
+	if !strings.Contains(stdout.String(), `"event":"session_start"`) || !strings.Contains(stdout.String(), `"session_id":"11111111-1111-4111-8111-111111111111"`) {
+		t.Fatalf("known session was not emitted before transcript creation: %s", stdout.String())
+	}
+}
+
+func TestFindClaudeSessionFileDoesNotGuessWhenExactSessionIsMissing(t *testing.T) {
+	base := t.TempDir()
+	project := filepath.Join(base, "projects", strings.ReplaceAll("/tmp/work", "/", "-"))
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(project, "other-session.jsonl")
+	if err := os.WriteFile(other, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := findClaudeSessionFile(base, "/tmp/work", "wanted-session", time.Now().Add(-time.Minute)); got != "" {
+		t.Fatalf("missing exact session must not fall back to concurrent file: %q", got)
+	}
+}
+
+func writeFakeTmux(t *testing.T, dir string) string {
+	t.Helper()
+	path := filepath.Join(dir, "tmux")
+	script := `#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "$FAKE_TMUX_LOG"
+state="${FAKE_TMUX_STATE:-${FAKE_TMUX_LOG}.state}"
+if [ "${FAKE_TMUX_BLOCK_COMMAND:-}" = "${1:-}" ]; then
+  if [ -n "${FAKE_TMUX_BLOCK_PID_FILE:-}" ]; then
+    printf '%s\n' "$$" > "$FAKE_TMUX_BLOCK_PID_FILE"
+  fi
+  trap '' TERM
+  while :; do :; done
+fi
+if [ "${FAKE_TMUX_FAIL_COMMAND:-}" = "${1:-}" ]; then
+  printf 'forced %s failure\n' "${1:-}" >&2
+  exit 42
+fi
+case "${1:-}" in
+  list-sessions) exit 1 ;;
+  new-session)
+    printf 'active\n' > "$state"
+    if [ "${FAKE_TMUX_BLOCK_AFTER_NEW_SESSION:-}" = "1" ]; then
+      if [ -n "${FAKE_TMUX_BLOCK_PID_FILE:-}" ]; then
+        printf '%s\n' "$$" > "$FAKE_TMUX_BLOCK_PID_FILE"
+      fi
+      trap '' TERM
+      while :; do :; done
+    fi
+    ;;
+  has-session) [ -f "$state" ] ;;
+  kill-session) rm -f "$state" ;;
+  capture-pane) printf '❯\n' ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func waitForFileContains(t *testing.T, path string, want string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		data, _ := os.ReadFile(path)
+		if strings.Contains(string(data), want) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	data, _ := os.ReadFile(path)
+	t.Fatalf("%s did not contain %q: %s", path, want, data)
+}
+
 func containsEnv(env []string, value string) bool {
 	for _, item := range env {
 		if item == value {
@@ -360,4 +566,26 @@ func containsEnv(env []string, value string) bool {
 		}
 	}
 	return false
+}
+
+func containsArgPair(args []string, key string, value string) bool {
+	return argValue(args, key) == value
+}
+
+func argValue(args []string, key string) string {
+	values := argValues(args, key)
+	if len(values) > 0 {
+		return values[0]
+	}
+	return ""
+}
+
+func argValues(args []string, key string) []string {
+	values := []string{}
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == key {
+			values = append(values, args[i+1])
+		}
+	}
+	return values
 }

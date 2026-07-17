@@ -21,10 +21,18 @@ func Classify(provider string, stdout string, stderr string, runError string) Fa
 	status := contract.StatusError
 
 	switch {
-	case containsAny(combined, "quota", "rate limit", "rate_limit", "usage limit", "exceeded your current quota", "insufficient credits", "credit balance", "purchase more credits"):
+	case containsAny(combined, "quota", "rate limit", "rate_limit", "usage limit", "usage balance exhausted", "payment required", "http 402", "status 402", "exceeded your current quota", "insufficient credits", "credit balance", "purchase more credits"):
 		class = contract.FailureQuota
 		status = contract.StatusQuota
 	case strings.EqualFold(provider, "Antigravity") && containsAny(combined, "agy completed without output"):
+		class = contract.FailureConfig
+	case strings.EqualFold(provider, "Antigravity") && containsAny(combined,
+		"not available in the current region",
+		"location is not supported",
+		"unsupported region",
+		"account is not eligible",
+		"account is ineligible",
+	):
 		class = contract.FailureConfig
 	case containsAny(combined, "permission requested") && containsAny(combined, "auto-rejecting"):
 		class = contract.FailureConfig

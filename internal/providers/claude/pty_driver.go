@@ -2,14 +2,17 @@ package claude
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -41,7 +44,34 @@ type observedSession struct {
 	sawPlaceholder        bool
 	assistantMessageCount int
 	toolCallCount         int
+	scanError             string
 }
+
+type claudePTYExecution struct {
+	tmux           tmuxClient
+	cfg            ptyDriverConfig
+	sessionName    string
+	sessionPath    string
+	startLine      int
+	started        time.Time
+	sessionEmitted bool
+	locator        *claudeSessionLocator
+	stdout         io.Writer
+	stderr         io.Writer
+}
+
+type claudeSessionLocator struct {
+	baseDir          string
+	cwd              string
+	sessionID        string
+	fallbackInterval time.Duration
+	lastFallback     time.Time
+}
+
+const (
+	claudeSessionJSONLTokenLimit  = 4 << 20
+	claudeSessionFallbackInterval = 3 * time.Second
+)
 
 func RunPTYDriverCLI(argv []string, stdout io.Writer, stderr io.Writer) int {
 	cfg, err := parsePTYDriverArgs(argv, stderr)
@@ -49,7 +79,9 @@ func RunPTYDriverCLI(argv []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	if err := runGoPTYDriver(cfg, stdout, stderr); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), ptyDriverSignals()...)
+	defer stop()
+	if err := runGoPTYDriverContext(ctx, cfg, stdout, stderr); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
@@ -109,79 +141,160 @@ func parsePTYDriverArgs(argv []string, stderr io.Writer) (ptyDriverConfig, error
 }
 
 func runGoPTYDriver(cfg ptyDriverConfig, stdout io.Writer, stderr io.Writer) error {
+	return runGoPTYDriverContext(context.Background(), cfg, stdout, stderr)
+}
+
+func runGoPTYDriverContext(ctx context.Context, cfg ptyDriverConfig, stdout io.Writer, stderr io.Writer) (runErr error) {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("Claude PTY canceled before start: %w", err)
+	}
 	tmuxPath, err := exec.LookPath("tmux")
 	if err != nil {
 		return fmt.Errorf("tmux is required for Claude PTY transport: %w", err)
 	}
-	cleanupStaleClaudePTYSession(tmuxPath)
+	tmux := newTmuxClient(tmuxPath)
+	if err := tmux.cleanupStaleSessions(ctx); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("Claude PTY canceled while cleaning stale tmux sessions: %w", ctx.Err())
+		}
+		emitJSON(stdout, map[string]any{"event": "warning", "message": err.Error()})
+	}
 	sessionName := fmt.Sprintf("ai-dispatch-claude-%d", time.Now().UnixNano())
 	started := time.Now()
 	startLine := 0
+	sessionPath := ""
+	locator := newClaudeSessionLocator(cfg.ClaudeBaseDir, cfg.CWD, cfg.SessionID, started)
 	if cfg.SessionID != "" {
-		if path := findClaudeSessionFile(cfg.ClaudeBaseDir, cfg.CWD, cfg.SessionID, started.Add(-2*time.Minute)); path != "" {
-			startLine = countLines(path)
+		sessionPath = findClaudeSessionFile(cfg.ClaudeBaseDir, cfg.CWD, cfg.SessionID, started.Add(-2*time.Minute))
+		if sessionPath != "" {
+			startLine = sessionLineCount(sessionPath, stdout)
 		}
 	}
-	if err := tmuxStart(tmuxPath, sessionName, cfg.CWD, cfg.Command); err != nil {
+	sessionEmitted := false
+	if cfg.SessionID != "" {
+		emitJSON(stdout, map[string]any{"event": "session_start", "session_id": cfg.SessionID})
+		sessionEmitted = true
+	}
+	defer func() {
+		if err := tmux.cleanupSession(sessionName); err != nil {
+			cleanupErr := fmt.Errorf("Claude tmux session cleanup failed: %w", err)
+			emitJSON(stdout, map[string]any{"event": "warning", "message": cleanupErr.Error()})
+			if runErr == nil {
+				runErr = cleanupErr
+			} else {
+				runErr = errors.Join(runErr, cleanupErr)
+			}
+		}
+	}()
+	if err := tmux.start(ctx, sessionName, cfg.CWD, cfg.Command); err != nil {
 		return err
 	}
-	defer func() { _ = exec.Command(tmuxPath, "kill-session", "-t", sessionName).Run() }()
-	if !waitForReady(tmuxPath, sessionName, cfg.StartupReadyPattern, cfg.StartupWait) {
-		emitJSON(stdout, map[string]any{"event": "warning", "message": "Claude tmux startup ready pattern not observed before input"})
+	run := claudePTYExecution{
+		tmux:           tmux,
+		cfg:            cfg,
+		sessionName:    sessionName,
+		sessionPath:    sessionPath,
+		startLine:      startLine,
+		started:        started,
+		sessionEmitted: sessionEmitted,
+		locator:        locator,
+		stdout:         stdout,
+		stderr:         stderr,
 	}
-	time.Sleep(600 * time.Millisecond)
-	sessionPath := ""
-	if cfg.SessionID != "" {
-		sessionPath = findClaudeSessionFile(cfg.ClaudeBaseDir, cfg.CWD, cfg.SessionID, started.Add(-5*time.Second))
-		if sessionPath != "" {
-			startLine = countLines(sessionPath)
-		}
+	return run.execute(ctx)
+}
+
+func (run *claudePTYExecution) execute(ctx context.Context) error {
+	ready, err := run.tmux.waitForReady(ctx, run.sessionName, run.cfg.StartupReadyPattern, run.cfg.StartupWait)
+	if err != nil {
+		return fmt.Errorf("Claude tmux startup readiness failed: %w", err)
 	}
-	if err := tmuxPasteInput(tmuxPath, sessionName, cfg.Input); err != nil {
+	if !ready {
+		emitJSON(run.stdout, map[string]any{"event": "warning", "message": "Claude tmux startup ready pattern not observed before input"})
+	}
+	if err := sleepContext(ctx, 600*time.Millisecond); err != nil {
+		return fmt.Errorf("Claude PTY canceled before input: %w", err)
+	}
+	if run.sessionPath == "" && run.locator != nil {
+		run.sessionPath = run.locator.find()
+	}
+	if run.sessionPath != "" {
+		run.startLine = sessionLineCount(run.sessionPath, run.stdout)
+	}
+	if err := run.tmux.pasteInput(ctx, run.sessionName, run.cfg.Input); err != nil {
 		return err
 	}
 	inputSubmittedAt := time.Now()
-	time.Sleep(800 * time.Millisecond)
-	if pane := tmuxCapture(tmuxPath, sessionName); !paneContainsInput(pane, cfg.Input) && extractPaneAssistantText(pane, cfg.Input) == "" {
-		_ = tmuxPasteInput(tmuxPath, sessionName, cfg.Input)
+	if err := sleepContext(ctx, 800*time.Millisecond); err != nil {
+		return fmt.Errorf("Claude PTY canceled after input: %w", err)
 	}
-	deadline := time.Now().Add(cfg.Timeout)
-	var last observedSession
-	sessionEmitted := false
+	pane, err := run.tmux.capture(ctx, run.sessionName)
+	if err != nil {
+		return fmt.Errorf("Claude tmux input verification failed: %w", err)
+	}
+	if !paneContainsInput(pane, run.cfg.Input) && extractPaneAssistantText(pane, run.cfg.Input) == "" {
+		if err := run.tmux.pasteInput(ctx, run.sessionName, run.cfg.Input); err != nil {
+			return fmt.Errorf("Claude tmux input retry failed: %w", err)
+		}
+	}
+	return run.poll(ctx, inputSubmittedAt)
+}
+
+func (run *claudePTYExecution) poll(ctx context.Context, inputSubmittedAt time.Time) error {
+	deadline := time.Time{}
+	if run.cfg.Timeout > 0 {
+		deadline = time.Now().Add(run.cfg.Timeout)
+	}
+	last := observedSession{sessionID: run.cfg.SessionID}
 	assistantEmitted := ""
+	lastScanError := ""
 	stableSince := time.Time{}
 	lastSignature := ""
-	for time.Now().Before(deadline) {
-		if sessionPath == "" {
-			sessionPath = findClaudeSessionFile(cfg.ClaudeBaseDir, cfg.CWD, cfg.SessionID, inputSubmittedAt.Add(-500*time.Millisecond))
-			if sessionPath != "" {
-				if cfg.SessionID != "" {
-					startLine = min(startLine, countLines(sessionPath))
+	for deadline.IsZero() || time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("Claude PTY canceled: %w", err)
+		}
+		if run.sessionPath == "" {
+			if run.locator != nil {
+				run.sessionPath = run.locator.find()
+			} else {
+				run.sessionPath = findClaudeSessionFile(run.cfg.ClaudeBaseDir, run.cfg.CWD, "", inputSubmittedAt.Add(-500*time.Millisecond))
+			}
+			if run.sessionPath != "" {
+				if run.cfg.SessionID != "" {
+					run.startLine = min(run.startLine, sessionLineCount(run.sessionPath, run.stdout))
 				} else {
-					startLine = 0
+					run.startLine = 0
 				}
 			}
 		}
-		if sessionPath != "" {
-			obs := parseObservedSession(sessionPath, startLine)
-			if obs.sessionID != "" && !sessionEmitted {
-				emitJSON(stdout, map[string]any{"event": "session_start", "session_file": sessionPath, "session_id": obs.sessionID})
-				sessionEmitted = true
+		if run.sessionPath != "" {
+			obs := parseObservedSession(run.sessionPath, run.startLine)
+			if obs.scanError != "" && obs.scanError != lastScanError {
+				emitJSON(run.stdout, map[string]any{"event": "warning", "message": obs.scanError})
+				lastScanError = obs.scanError
+			}
+			if obs.sessionID != "" && !run.sessionEmitted {
+				emitJSON(run.stdout, map[string]any{"event": "session_start", "session_file": run.sessionPath, "session_id": obs.sessionID})
+				run.sessionEmitted = true
 			}
 			if obs.assistantText != "" && obs.assistantText != assistantEmitted {
-				emitJSON(stdout, map[string]any{"event": "assistant_text", "text": obs.assistantText})
+				emitJSON(run.stdout, map[string]any{"event": "assistant_text", "text": obs.assistantText})
 				assistantEmitted = obs.assistantText
 			}
 			last = obs
 		}
-		pane := tmuxCapture(tmuxPath, sessionName)
+		pane, err := run.tmux.capture(ctx, run.sessionName)
+		if err != nil {
+			return fmt.Errorf("Claude tmux capture failed: %w", err)
+		}
 		if last.assistantText == "" {
-			if paneText := extractPaneAssistantText(pane, cfg.Input); paneText != "" {
+			if paneText := extractPaneAssistantText(pane, run.cfg.Input); paneText != "" {
 				last.assistantText = paneText
 			}
 		}
 		if strings.Contains(pane, "Interrupted") || strings.Contains(pane, "interrupt") && strings.Contains(pane, "continue") {
-			emitDone(stdout, "interrupted_prompt", started, last)
+			emitDone(run.stdout, "interrupted_prompt", run.started, last)
 			return nil
 		}
 		signature := last.assistantText + "|" + last.lastStopReason + "|" + fmt.Sprint(last.assistantMessageCount, last.toolCallCount)
@@ -190,128 +303,35 @@ func runGoPTYDriver(cfg ptyDriverConfig, stdout io.Writer, stderr io.Writer) err
 				lastSignature = signature
 				stableSince = time.Now()
 			} else if time.Since(stableSince) >= 1200*time.Millisecond {
-				emitDone(stdout, "done", started, last)
+				emitDone(run.stdout, "done", run.started, last)
 				return nil
 			}
 		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	emitDoneWithTail(stdout, "hard_timeout", started, last, tmuxCapture(tmuxPath, sessionName))
-	fmt.Fprintln(stderr, "Claude PTY timed out")
-	return nil
-}
-
-func cleanupStaleClaudePTYSession(tmuxPath string) {
-	ttl := claudePTYSessionTTL()
-	if ttl <= 0 {
-		return
-	}
-	out, err := exec.Command(tmuxPath, "list-sessions", "-F", "#{session_name}\t#{session_created}").Output()
-	if err != nil {
-		return
-	}
-	cutoff := time.Now().Add(-ttl).Unix()
-	for _, line := range strings.Split(string(out), "\n") {
-		name, createdRaw, ok := strings.Cut(strings.TrimSpace(line), "\t")
-		if !ok || !isClaudePTYSessionName(name) {
-			continue
+		if err := sleepContext(ctx, 200*time.Millisecond); err != nil {
+			return fmt.Errorf("Claude PTY canceled: %w", err)
 		}
-		created, err := strconv.ParseInt(strings.TrimSpace(createdRaw), 10, 64)
-		if err != nil || created > cutoff {
-			continue
-		}
-		_ = exec.Command(tmuxPath, "kill-session", "-t", name).Run()
 	}
-}
-
-func claudePTYSessionTTL() time.Duration {
-	raw := strings.TrimSpace(os.Getenv("AI_DISPATCH_CLAUDE_PTY_SESSION_TTL_SECONDS"))
-	if raw == "" {
-		return 6 * time.Hour
+	pane, captureErr := run.tmux.capture(ctx, run.sessionName)
+	if captureErr != nil {
+		emitJSON(run.stdout, map[string]any{"event": "warning", "message": fmt.Sprintf("Claude final tmux capture failed: %v", captureErr)})
 	}
-	seconds, err := strconv.Atoi(raw)
-	if err != nil || seconds < 0 {
-		return 6 * time.Hour
-	}
-	return time.Duration(seconds) * time.Second
-}
-
-func isClaudePTYSessionName(name string) bool {
-	return strings.HasPrefix(name, "ai-dispatch-claude-") || strings.HasPrefix(name, "claude-pty-")
-}
-
-func tmuxStart(tmuxPath string, sessionName string, cwd string, command []string) error {
-	args := []string{"new-session", "-d", "-s", sessionName}
-	if cwd != "" {
-		args = append(args, "-c", cwd)
-	}
-	args = append(args, command...)
-	if out, err := exec.Command(tmuxPath, args...).CombinedOutput(); err != nil {
-		return fmt.Errorf("tmux new-session failed: %w: %s", err, strings.TrimSpace(string(out)))
+	emitDoneWithTail(run.stdout, "hard_timeout", run.started, last, pane)
+	fmt.Fprintln(run.stderr, "Claude PTY timed out")
+	if captureErr != nil {
+		return fmt.Errorf("Claude final tmux capture failed: %w", captureErr)
 	}
 	return nil
 }
 
-func tmuxPasteInput(tmuxPath string, sessionName string, input string) error {
-	target := sessionName + ":0.0"
-	_ = exec.Command(tmuxPath, "send-keys", "-t", target, "C-u").Run()
-	if !strings.Contains(input, "\n") && len([]rune(input)) <= 4000 {
-		if out, err := exec.Command(tmuxPath, "send-keys", "-t", target, "-l", input).CombinedOutput(); err != nil {
-			return fmt.Errorf("tmux send-keys literal failed: %w: %s", err, strings.TrimSpace(string(out)))
-		}
-		if out, err := exec.Command(tmuxPath, "send-keys", "-t", target, "Enter").CombinedOutput(); err != nil {
-			return fmt.Errorf("tmux send-keys enter failed: %w: %s", err, strings.TrimSpace(string(out)))
-		}
+func sleepContext(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
 		return nil
 	}
-	tmp, err := os.CreateTemp("", "ai-dispatch-claude-input-*.txt")
-	if err != nil {
-		return err
-	}
-	path := tmp.Name()
-	defer os.Remove(path)
-	if _, err := tmp.WriteString(input); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	buffer := "ai-dispatch-" + fmt.Sprint(time.Now().UnixNano())
-	if out, err := exec.Command(tmuxPath, "load-buffer", "-b", buffer, path).CombinedOutput(); err != nil {
-		return fmt.Errorf("tmux load-buffer failed: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	if out, err := exec.Command(tmuxPath, "paste-buffer", "-b", buffer, "-t", target).CombinedOutput(); err != nil {
-		return fmt.Errorf("tmux paste-buffer failed: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	_ = exec.Command(tmuxPath, "delete-buffer", "-b", buffer).Run()
-	if out, err := exec.Command(tmuxPath, "send-keys", "-t", target, "Enter").CombinedOutput(); err != nil {
-		return fmt.Errorf("tmux send-keys failed: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-func waitForReady(tmuxPath string, sessionName string, pattern string, timeout time.Duration) bool {
-	if timeout <= 0 {
-		return true
-	}
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		pane := tmuxCapture(tmuxPath, sessionName)
-		if pattern == "" || strings.Contains(pane, pattern) || paneLooksReady(pane) {
-			return true
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	return false
-}
-
-func tmuxCapture(tmuxPath string, sessionName string) string {
-	out, err := exec.Command(tmuxPath, "capture-pane", "-p", "-t", sessionName, "-S", "-2000").Output()
-	if err != nil {
-		return ""
-	}
-	return string(out)
 }
 
 func paneLooksReady(pane string) bool {
@@ -390,6 +410,9 @@ func inputNeedle(input string) string {
 func findClaudeSessionFile(baseDir string, cwd string, sessionID string, threshold time.Time) string {
 	projectsDir := filepath.Join(baseDir, "projects")
 	if sessionID != "" {
+		if direct := findClaudeSessionFileInCWD(baseDir, cwd, sessionID); direct != "" {
+			return direct
+		}
 		var direct string
 		_ = filepath.WalkDir(projectsDir, func(path string, d os.DirEntry, err error) error {
 			if err == nil && !d.IsDir() && filepath.Base(path) == sessionID+".jsonl" {
@@ -401,6 +424,7 @@ func findClaudeSessionFile(baseDir string, cwd string, sessionID string, thresho
 		if direct != "" {
 			return direct
 		}
+		return ""
 	}
 	searchRoot := projectsDir
 	if cwd != "" {
@@ -430,6 +454,42 @@ func findClaudeSessionFile(baseDir string, cwd string, sessionID string, thresho
 	return best
 }
 
+func findClaudeSessionFileInCWD(baseDir string, cwd string, sessionID string) string {
+	if cwd == "" || sessionID == "" {
+		return ""
+	}
+	path := filepath.Join(baseDir, "projects", strings.ReplaceAll(cwd, "/", "-"), sessionID+".jsonl")
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		return path
+	}
+	return ""
+}
+
+func newClaudeSessionLocator(baseDir string, cwd string, sessionID string, lastFallback time.Time) *claudeSessionLocator {
+	if sessionID == "" {
+		return nil
+	}
+	return &claudeSessionLocator{
+		baseDir:          baseDir,
+		cwd:              cwd,
+		sessionID:        sessionID,
+		fallbackInterval: claudeSessionFallbackInterval,
+		lastFallback:     lastFallback,
+	}
+}
+
+func (locator *claudeSessionLocator) find() string {
+	if direct := findClaudeSessionFileInCWD(locator.baseDir, locator.cwd, locator.sessionID); direct != "" {
+		return direct
+	}
+	now := time.Now()
+	if now.Sub(locator.lastFallback) < locator.fallbackInterval {
+		return ""
+	}
+	locator.lastFallback = now
+	return findClaudeSessionFile(locator.baseDir, "", locator.sessionID, time.Time{})
+}
+
 func parseObservedSession(path string, startLine int) observedSession {
 	file, err := os.Open(path)
 	if err != nil {
@@ -438,6 +498,7 @@ func parseObservedSession(path string, startLine int) observedSession {
 	defer file.Close()
 	obs := observedSession{path: path, sessionID: strings.TrimSuffix(filepath.Base(path), ".jsonl")}
 	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64<<10), claudeSessionJSONLTokenLimit)
 	lineNo := 0
 	for scanner.Scan() {
 		if lineNo < startLine {
@@ -487,21 +548,49 @@ func parseObservedSession(path string, startLine int) observedSession {
 			obs.assistantMessageCount++
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		obs.scanError = fmt.Sprintf("Claude session JSONL scan failed within the %d-byte token limit", claudeSessionJSONLTokenLimit)
+	}
 	return obs
 }
 
-func countLines(path string) int {
+func sessionLineCount(path string, stdout io.Writer) int {
+	count, err := countLines(path)
+	if err == nil {
+		return count
+	}
+	emitJSON(stdout, map[string]any{"event": "warning", "message": "Claude session JSONL line count failed"})
+	return int(^uint(0) >> 1)
+}
+
+func countLines(path string) (int, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	defer file.Close()
-	scanner := bufio.NewScanner(file)
+	buffer := make([]byte, 64<<10)
 	count := 0
-	for scanner.Scan() {
+	var total int64
+	last := byte('\n')
+	for {
+		n, readErr := file.Read(buffer)
+		if n > 0 {
+			count += bytes.Count(buffer[:n], []byte{'\n'})
+			total += int64(n)
+			last = buffer[n-1]
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return 0, readErr
+		}
+	}
+	if total > 0 && last != '\n' {
 		count++
 	}
-	return count
+	return count, nil
 }
 
 func emitDone(stdout io.Writer, reason string, started time.Time, obs observedSession) {

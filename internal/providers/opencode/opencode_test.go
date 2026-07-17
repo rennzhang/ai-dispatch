@@ -1,11 +1,15 @@
 package opencode
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/rennzhang/ai-dispatch/internal/contract"
 	"github.com/rennzhang/ai-dispatch/internal/providers"
 	"github.com/rennzhang/ai-dispatch/internal/routing"
 	"github.com/rennzhang/ai-dispatch/internal/runtime"
@@ -14,7 +18,7 @@ import (
 func TestBuildOpenCodeArgs(t *testing.T) {
 	bin := fakeOpenCodeBin(t)
 	target := routing.DispatchTarget{Requested: "openrouter/x", Provider: "opencode", Model: "openrouter/x"}
-	spec, err := Provider{}.Build(providers.BuildRequest{Prompt: "hello", Target: target})
+	spec, err := Provider{}.Build(providers.BuildRequest{Prompt: "hello", Target: target, Effort: contract.EffortAuto})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,6 +30,87 @@ func TestBuildOpenCodeArgs(t *testing.T) {
 		if spec.Args[i] != want[i] {
 			t.Fatalf("args=%#v", spec.Args)
 		}
+	}
+	if strings.Contains(strings.Join(spec.Args, "\x00"), "--variant") {
+		t.Fatalf("auto must omit --variant: %#v", spec.Args)
+	}
+}
+
+func TestBuildOpenCodeExactVariant(t *testing.T) {
+	bin := fakeOpenCodeBin(t)
+	target := routing.DispatchTarget{Requested: "openrouter/x", Provider: "opencode", Model: "openrouter/x"}
+	spec, err := Provider{}.Build(providers.BuildRequest{Prompt: "hello", Target: target, Effort: contract.EffortHigh})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(spec.Args, "\x00"), "--variant\x00high") {
+		t.Fatalf("args=%#v", spec.Args)
+	}
+	if spec.Args[0] != bin {
+		t.Fatalf("bin=%q", spec.Args[0])
+	}
+}
+
+func TestResolveOpenCodeEffortExactAndFallback(t *testing.T) {
+	resetOpenCodeModelsCacheForTest()
+	t.Cleanup(resetOpenCodeModelsCacheForTest)
+	var calls atomic.Int32
+	queryOpenCodeModels = func(ctx context.Context, providerID string) ([]byte, error) {
+		calls.Add(1)
+		if providerID != "openrouter" {
+			t.Fatalf("providerID=%q", providerID)
+		}
+		return []byte(`openrouter/acme/model-a
+{
+  "id": "acme/model-a",
+  "providerID": "openrouter",
+  "variants": {
+    "low": {},
+    "high": {}
+  }
+}
+`), nil
+	}
+	t.Cleanup(func() { queryOpenCodeModels = defaultQueryOpenCodeModels })
+
+	p := Provider{}
+	exact := p.ResolveEffort(context.Background(), providers.EffortRequest{
+		Model:     "openrouter/acme/model-a",
+		Requested: contract.EffortHigh,
+	})
+	if exact.Applied != contract.EffortHigh || exact.Fallback {
+		t.Fatalf("exact=%+v", exact)
+	}
+	missing := p.ResolveEffort(context.Background(), providers.EffortRequest{
+		Model:     "openrouter/acme/model-a",
+		Requested: contract.EffortMedium,
+	})
+	if missing.Applied != contract.EffortAuto || !missing.Fallback {
+		t.Fatalf("missing=%+v", missing)
+	}
+	// Cache hit for second resolution of same provider.
+	_ = p.ResolveEffort(context.Background(), providers.EffortRequest{
+		Model:     "openrouter/acme/model-a",
+		Requested: contract.EffortLow,
+	})
+	if calls.Load() != 1 {
+		t.Fatalf("expected one models query, got %d", calls.Load())
+	}
+}
+
+func TestResolveOpenCodeEffortQueryFailureFallsBack(t *testing.T) {
+	resetOpenCodeModelsCacheForTest()
+	t.Cleanup(resetOpenCodeModelsCacheForTest)
+	queryOpenCodeModels = func(ctx context.Context, providerID string) ([]byte, error) {
+		return nil, errors.New("catalog unavailable")
+	}
+	t.Cleanup(func() { queryOpenCodeModels = defaultQueryOpenCodeModels })
+	res := Provider{}.ResolveEffort(context.Background(), providers.EffortRequest{
+		Model:     "openrouter/x",
+		Requested: contract.EffortHigh,
+	})
+	if res.Applied != contract.EffortAuto || !res.Fallback || !strings.Contains(res.Reason, "catalog unavailable") {
+		t.Fatalf("res=%+v", res)
 	}
 }
 

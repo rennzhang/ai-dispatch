@@ -77,7 +77,7 @@ func runsFailures(argv []string, stderr io.Writer) (failureSummary, error) {
 		filter.Since = t
 	}
 	records, err := runstore.ListFiltered("", filter)
-	if err != nil {
+	if err := surfaceInvalidRunRecords(err, stderr); err != nil {
 		return failureSummary{}, err
 	}
 	summary := failureSummary{

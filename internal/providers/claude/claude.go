@@ -1,6 +1,9 @@
 package claude
 
 import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -17,6 +20,18 @@ import (
 type Provider struct{}
 
 func (Provider) Name() string { return "claude" }
+
+func (Provider) ResolveEffort(_ context.Context, req providers.EffortRequest) providers.EffortResolution {
+	requested := contract.NormalizeEffort(req.Requested)
+	if requested == contract.EffortAuto {
+		return providers.EffortAuto(requested, req.Model)
+	}
+	// Current Claude Code CLI (print and PTY) rejects --effort as unknown.
+	// Anthropic "effort" docs describe API/model semantics, not this CLI flag.
+	// Keep the shared ResolveEffort contract so a future verified CLI can opt in.
+	return providers.EffortFallback(requested, req.Model,
+		fmt.Sprintf("effort %s is not supported by the Claude Code CLI; applied auto", requested))
+}
 
 func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 	transport := effectiveTransport(req)
@@ -46,6 +61,7 @@ func buildAPI(req providers.BuildRequest) (runtime.CommandSpec, error) {
 	if shouldPassClaudeModel(req) {
 		args = append(args, "--model", req.Target.Model)
 	}
+	// Never pass --effort: ResolveEffort falls back to auto until CLI support is verified.
 	var stdin []byte
 	if req.PromptFile != "" {
 		data, err := os.ReadFile(req.PromptFile)
@@ -69,29 +85,33 @@ func buildPTY(req providers.BuildRequest) (runtime.CommandSpec, error) {
 		cwd, _ = os.Getwd()
 	}
 	timeout := req.TimeoutSeconds
-	if timeout <= 0 {
-		timeout = 300
-	}
 	driverTimeout := timeout
 	if timeout > 10 {
 		driverTimeout = timeout - 5
+	}
+	driverSessionID := req.SessionID
+	if driverSessionID == "" {
+		driverSessionID, err = newClaudeSessionID()
+		if err != nil {
+			return runtime.CommandSpec{}, fmt.Errorf("cannot allocate Claude session id: %w", err)
+		}
 	}
 	claudeArgs := []string{"claude", "--dangerously-skip-permissions"}
 	if shouldPassClaudeModel(req) {
 		claudeArgs = append(claudeArgs, "--model", req.Target.Model)
 	}
+	// Never pass --effort: ResolveEffort falls back to auto until CLI support is verified.
 	if req.SessionID != "" {
 		claudeArgs = append(claudeArgs, "--resume", req.SessionID)
+	} else {
+		claudeArgs = append(claudeArgs, "--session-id", driverSessionID)
 	}
-	command := claudeArgs
-	env := claudeEnv(req.SessionID)
-	if req.SessionID != "" {
-		command = append([]string{
-			"env",
-			"CLAUDE_SESSION_ID=" + req.SessionID,
-			"AI_DISPATCH_CLAUDE_SESSION_ID=" + req.SessionID,
-		}, claudeArgs...)
-	}
+	command := append([]string{
+		"env",
+		"CLAUDE_SESSION_ID=" + driverSessionID,
+		"AI_DISPATCH_CLAUDE_SESSION_ID=" + driverSessionID,
+	}, claudeArgs...)
+	env := claudeEnv(driverSessionID)
 	args := append([]string{}, driver...)
 	args = append(args,
 		"--transport", "tmux",
@@ -99,12 +119,37 @@ func buildPTY(req providers.BuildRequest) (runtime.CommandSpec, error) {
 		"--startup-wait", "30",
 		"--startup-ready-pattern", "\u276f",
 		"--timeout", fmt.Sprintf("%d", driverTimeout),
-		"--input", req.Prompt,
+		"--session-id", driverSessionID,
 		"--claude-base-dir", filepath.Join(os.Getenv("HOME"), ".claude"),
-		"--",
 	)
+	if req.PromptFile != "" {
+		args = append(args, "--input-file", req.PromptFile)
+	} else {
+		args = append(args, "--input", req.Prompt)
+	}
+	args = append(args, "--")
 	args = append(args, command...)
 	return runtime.CommandSpec{Args: args, Env: env}, nil
+}
+
+func newClaudeSessionID() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	raw[6] = raw[6]&0x0f | 0x40
+	raw[8] = raw[8]&0x3f | 0x80
+	encoded := make([]byte, 36)
+	hex.Encode(encoded[0:8], raw[0:4])
+	encoded[8] = '-'
+	hex.Encode(encoded[9:13], raw[4:6])
+	encoded[13] = '-'
+	hex.Encode(encoded[14:18], raw[6:8])
+	encoded[18] = '-'
+	hex.Encode(encoded[19:23], raw[8:10])
+	encoded[23] = '-'
+	hex.Encode(encoded[24:36], raw[10:16])
+	return string(encoded), nil
 }
 
 func (Provider) Parse(run runtime.RunResult, req providers.BuildRequest) contract.ProviderResult {
@@ -240,8 +285,13 @@ func parsePTY(run runtime.RunResult, req providers.BuildRequest) contract.Provid
 	sessionID := ""
 	done := map[string]any(nil)
 	sawPlaceholder := false
+	warnings := []string{}
 	for _, event := range events {
 		switch firstString(event, "event") {
+		case "warning":
+			if warning := strings.TrimSpace(firstString(event, "message")); warning != "" {
+				warnings = appendUniqueString(warnings, warning)
+			}
 		case "session_start":
 			sessionID = firstNonEmpty(sessionID, firstString(event, "session_id"))
 		case "assistant_text":
@@ -280,10 +330,10 @@ func parsePTY(run runtime.RunResult, req providers.BuildRequest) contract.Provid
 				message += "\n" + tail
 			}
 		}
-		return errorResult(req, contract.StatusTimeout, contract.FailureTimeout, message, 124, duration)
+		return errorResult(req, contract.StatusTimeout, contract.FailureTimeout, message, 124, duration, warnings)
 	}
 	if done != nil && firstString(done, "termination_reason") == "interrupted_prompt" {
-		return errorResult(req, contract.StatusError, contract.FailureRuntime, "Claude entered the interactive Interrupted prompt before answering. Use --provider-opt claude.transport=print for unattended dispatch from inside tmux.", 1, duration)
+		return errorResult(req, contract.StatusError, contract.FailureRuntime, "Claude entered the interactive Interrupted prompt before answering. Use --provider-opt claude.transport=print for unattended dispatch from inside tmux.", 1, duration, warnings)
 	}
 	if run.ExitCode != 0 {
 		stderr := strings.TrimSpace(string(run.Stderr))
@@ -291,7 +341,7 @@ func parsePTY(run runtime.RunResult, req providers.BuildRequest) contract.Provid
 			stderr = fmt.Sprintf("claude_pty_driver subprocess exited with code %d but produced no stderr output. Check tmux availability (tmux -V), claude CLI in PATH, and that --input path is readable.", run.ExitCode)
 		}
 		classified := diagnostics.Classify("Claude PTY", string(run.Stdout), stderr, run.Error)
-		return errorResult(req, classified.Status, classified.Class, classified.Stderr, run.ExitCode, duration)
+		return errorResult(req, classified.Status, classified.Class, classified.Stderr, run.ExitCode, duration, warnings)
 	}
 
 	text := finalPTYText(done)
@@ -300,7 +350,7 @@ func parsePTY(run runtime.RunResult, req providers.BuildRequest) contract.Provid
 	}
 	if isClaudeErrorText(text) {
 		classified := diagnostics.Classify("Claude PTY", text, text, run.Error)
-		return errorResult(req, classified.Status, classified.Class, classified.Stderr, run.ExitCode, duration)
+		return errorResult(req, classified.Status, classified.Class, classified.Stderr, run.ExitCode, duration, warnings)
 	}
 	if text == "" && toolCalls > 0 {
 		text = "(no text summary - work completed via tool calls)"
@@ -309,7 +359,7 @@ func parsePTY(run runtime.RunResult, req providers.BuildRequest) contract.Provid
 	if !ok {
 		stderr := ptyEmptyError(done)
 		classified := diagnostics.Classify("Claude PTY", string(run.Stdout), stderr, run.Error)
-		return errorResult(req, classified.Status, classified.Class, classified.Stderr, run.ExitCode, duration)
+		return errorResult(req, classified.Status, classified.Class, classified.Stderr, run.ExitCode, duration, warnings)
 	}
 	return contract.ProviderResult{
 		SchemaVersion:   "2.0",
@@ -330,13 +380,13 @@ func parsePTY(run runtime.RunResult, req providers.BuildRequest) contract.Provid
 		ExitCode:     run.ExitCode,
 		DurationMS:   duration,
 		Stderr:       "",
-		Warnings:     []string{},
+		Warnings:     warnings,
 		NextAction:   contract.NextDone,
 		FailureClass: nil,
 	}
 }
 
-func errorResult(req providers.BuildRequest, status contract.Status, failure contract.FailureClass, stderr string, exitCode int, duration int64) contract.ProviderResult {
+func errorResult(req providers.BuildRequest, status contract.Status, failure contract.FailureClass, stderr string, exitCode int, duration int64, warnings []string) contract.ProviderResult {
 	return contract.ProviderResult{
 		SchemaVersion:   "2.0",
 		OK:              false,
@@ -354,10 +404,19 @@ func errorResult(req providers.BuildRequest, status contract.Status, failure con
 		ExitCode:     exitCode,
 		DurationMS:   duration,
 		Stderr:       stderr,
-		Warnings:     []string{},
+		Warnings:     warnings,
 		NextAction:   contract.NextActionForFailure(failure, "claude"),
 		FailureClass: &failure,
 	}
+}
+
+func appendUniqueString(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func parsePTYEvents(stdout string) []map[string]any {

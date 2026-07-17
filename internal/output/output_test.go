@@ -14,6 +14,9 @@ func TestWriteFileFrontmatter(t *testing.T) {
 	result.ModelUsed = "gpt-5.5"
 	result.RequestedTarget = "gpt5.5"
 	result.SessionID = "s1"
+	result.RequestedEffort = contract.EffortXHigh
+	result.AppliedEffort = contract.EffortAuto
+	result.EffortFallbackReason = "effort xhigh is not supported; applied auto"
 	result.RouteTrace = []string{"codex:gpt-5.5"}
 	result.DurationMS = 12
 	path := t.TempDir() + "/result.md"
@@ -30,6 +33,9 @@ func TestWriteFileFrontmatter(t *testing.T) {
 		`  provider: "codex"`,
 		`  model: "gpt-5.5"`,
 		`  requested_target: "gpt5.5"`,
+		`  requested_effort: "xhigh"`,
+		`  applied_effort: "auto"`,
+		`  effort_fallback_reason: "effort xhigh is not supported; applied auto"`,
 		`  session_id: "s1"`,
 		`route_trace:`,
 		`    - "codex:gpt-5.5"`,

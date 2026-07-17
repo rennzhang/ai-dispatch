@@ -1,12 +1,16 @@
 package opencode
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/rennzhang/ai-dispatch/internal/contract"
 	"github.com/rennzhang/ai-dispatch/internal/diagnostics"
@@ -14,9 +18,33 @@ import (
 	"github.com/rennzhang/ai-dispatch/internal/runtime"
 )
 
+const (
+	modelsQueryTimeout = 5 * time.Second
+	modelsCacheTTL     = 5 * time.Minute
+)
+
 type Provider struct{}
 
 func (Provider) Name() string { return "opencode" }
+
+func (Provider) ResolveEffort(ctx context.Context, req providers.EffortRequest) providers.EffortResolution {
+	requested := contract.NormalizeEffort(req.Requested)
+	if requested == contract.EffortAuto {
+		return providers.EffortAuto(requested, req.Model)
+	}
+	variants, ok, reason := lookupOpenCodeVariants(ctx, req.Model)
+	if !ok {
+		if reason == "" {
+			reason = fmt.Sprintf("effort %s could not be confirmed for opencode/%s; applied auto", requested, effortModelLabel(req.Model))
+		}
+		return providers.EffortFallback(requested, req.Model, reason)
+	}
+	if _, found := variants[string(requested)]; found {
+		return providers.EffortExact(requested, req.Model)
+	}
+	return providers.EffortFallback(requested, req.Model,
+		fmt.Sprintf("effort %s is not supported by opencode/%s; applied auto", requested, effortModelLabel(req.Model)))
+}
 
 func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 	format := strings.TrimSpace(req.ProviderOptions["format"])
@@ -35,6 +63,9 @@ func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 	if req.Target.Model != "" {
 		args = append(args, "--model", req.Target.Model)
 	}
+	if req.Effort != "" && req.Effort != contract.EffortAuto {
+		args = append(args, "--variant", string(req.Effort))
+	}
 	if req.SessionID != "" {
 		args = append(args, "--session", req.SessionID)
 	}
@@ -47,6 +78,202 @@ func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 		args = append(args, req.Prompt)
 	}
 	return runtime.CommandSpec{Args: args, Env: runtime.SanitizedEnv(nil)}, nil
+}
+
+type openCodeModelsCacheEntry struct {
+	fetchedAt time.Time
+	// modelID -> set of variant keys exactly as returned by opencode models --verbose
+	variants map[string]map[string]struct{}
+}
+
+var (
+	openCodeModelsCacheMu sync.Mutex
+	openCodeModelsCache   = map[string]openCodeModelsCacheEntry{}
+	// queryOpenCodeModels is package-local so tests can inject catalog output.
+	queryOpenCodeModels = defaultQueryOpenCodeModels
+)
+
+func lookupOpenCodeVariants(ctx context.Context, model string) (map[string]struct{}, bool, string) {
+	providerID, modelID, ok := splitOpenCodeModel(model)
+	if !ok {
+		return nil, false, fmt.Sprintf("effort cannot be confirmed for opencode/%s without provider/model id; applied auto", effortModelLabel(model))
+	}
+	catalog, err := loadOpenCodeProviderCatalog(ctx, providerID)
+	if err != nil {
+		return nil, false, fmt.Sprintf("effort could not be confirmed for opencode/%s: %s; applied auto", effortModelLabel(model), compactQueryError(err))
+	}
+	variants, found := catalog[model]
+	if !found {
+		variants, found = catalog[modelID]
+	}
+	if !found {
+		// Also try providerID/id form used by verbose listing lines.
+		variants, found = catalog[providerID+"/"+modelID]
+	}
+	if !found || len(variants) == 0 {
+		return nil, false, fmt.Sprintf("effort could not be confirmed for opencode/%s: model variants unavailable; applied auto", effortModelLabel(model))
+	}
+	return variants, true, ""
+}
+
+func loadOpenCodeProviderCatalog(ctx context.Context, providerID string) (map[string]map[string]struct{}, error) {
+	openCodeModelsCacheMu.Lock()
+	if entry, ok := openCodeModelsCache[providerID]; ok && time.Since(entry.fetchedAt) < modelsCacheTTL {
+		out := entry.variants
+		openCodeModelsCacheMu.Unlock()
+		return out, nil
+	}
+	openCodeModelsCacheMu.Unlock()
+
+	queryCtx, cancel := context.WithTimeout(ctx, modelsQueryTimeout)
+	defer cancel()
+	raw, err := queryOpenCodeModels(queryCtx, providerID)
+	if err != nil {
+		return nil, err
+	}
+	variants, err := parseOpenCodeModelsVerbose(raw)
+	if err != nil {
+		return nil, err
+	}
+	openCodeModelsCacheMu.Lock()
+	openCodeModelsCache[providerID] = openCodeModelsCacheEntry{
+		fetchedAt: time.Now(),
+		variants:  variants,
+	}
+	openCodeModelsCacheMu.Unlock()
+	return variants, nil
+}
+
+func defaultQueryOpenCodeModels(ctx context.Context, providerID string) ([]byte, error) {
+	bin, err := openCodeBinary()
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, bin, "models", providerID, "--verbose")
+	cmd.Env = runtime.SanitizedEnv(nil)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return nil, fmt.Errorf("%s", msg)
+	}
+	return stdout.Bytes(), nil
+}
+
+func parseOpenCodeModelsVerbose(raw []byte) (map[string]map[string]struct{}, error) {
+	out := map[string]map[string]struct{}{}
+	text := string(raw)
+	if strings.TrimSpace(text) == "" {
+		return nil, fmt.Errorf("empty models output")
+	}
+	lines := strings.Split(text, "\n")
+	var currentID string
+	var jsonBuf strings.Builder
+	flush := func() error {
+		if currentID == "" || jsonBuf.Len() == 0 {
+			jsonBuf.Reset()
+			return nil
+		}
+		payload := strings.TrimSpace(jsonBuf.String())
+		jsonBuf.Reset()
+		if payload == "" {
+			return nil
+		}
+		var record struct {
+			ID         string                    `json:"id"`
+			ProviderID string                    `json:"providerID"`
+			Variants   map[string]map[string]any `json:"variants"`
+		}
+		if err := json.Unmarshal([]byte(payload), &record); err != nil {
+			return fmt.Errorf("parse model record for %s: %w", currentID, err)
+		}
+		variants := map[string]struct{}{}
+		for key := range record.Variants {
+			variants[key] = struct{}{}
+		}
+		// Cache under listing line id and bare id forms for exact matching.
+		out[currentID] = variants
+		if record.ID != "" {
+			out[record.ID] = variants
+			if record.ProviderID != "" {
+				out[record.ProviderID+"/"+record.ID] = variants
+			}
+		}
+		return nil
+	}
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "{") || jsonBuf.Len() > 0 {
+			if jsonBuf.Len() > 0 {
+				jsonBuf.WriteByte('\n')
+			}
+			jsonBuf.WriteString(line)
+			if json.Valid([]byte(jsonBuf.String())) {
+				if err := flush(); err != nil {
+					return nil, err
+				}
+				currentID = ""
+			}
+			continue
+		}
+		if err := flush(); err != nil {
+			return nil, err
+		}
+		currentID = trimmed
+	}
+	if err := flush(); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no model records parsed")
+	}
+	return out, nil
+}
+
+func splitOpenCodeModel(model string) (providerID string, modelID string, ok bool) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return "", "", false
+	}
+	providerID, modelID, ok = strings.Cut(model, "/")
+	if !ok || providerID == "" || modelID == "" {
+		return "", "", false
+	}
+	return providerID, modelID, true
+}
+
+func compactQueryError(err error) string {
+	msg := strings.Join(strings.Fields(err.Error()), " ")
+	runes := []rune(msg)
+	if len(runes) > 160 {
+		runes = runes[:160]
+	}
+	return string(runes)
+}
+
+func effortModelLabel(model string) string {
+	if strings.TrimSpace(model) == "" {
+		return "default"
+	}
+	return model
+}
+
+// resetOpenCodeModelsCacheForTest clears the in-process models cache.
+func resetOpenCodeModelsCacheForTest() {
+	openCodeModelsCacheMu.Lock()
+	defer openCodeModelsCacheMu.Unlock()
+	openCodeModelsCache = map[string]openCodeModelsCacheEntry{}
 }
 
 func openCodeBinary() (string, error) {
