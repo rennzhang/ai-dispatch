@@ -49,6 +49,14 @@ curl -fsSL https://raw.githubusercontent.com/rennzhang/ai-dispatch/main/scripts/
 ai-dispatch doctor
 ```
 
+要确认 PATH、skill 或 npm 入口实际运行的是哪一份构建：
+
+```bash
+ai-dispatch version --format json
+```
+
+以返回的 `version`、`revision`、`modified` 为准；不要只看安装目录里的 `VERSION` 文件。
+
 只安装 CLI：
 
 ```bash
@@ -164,6 +172,18 @@ ai-dispatch 当前内置支持五类本机 CLI provider：
 - [Provider Acceptance](docs/provider-acceptance.md)：新增或回归 provider 的真实验收 harness。
 - [配置参考](skills/ai-dispatch/references/config.md)：`config.json` 字段和模型路由。
 - [偏好格式](skills/ai-dispatch/references/preferences.md)：`preferences.md` 怎么维护。
+
+## Reasoning effort
+
+跨 provider 可用顶层 `--effort` 控制推理档位：
+
+```bash
+ai-dispatch send gpt5.6 "implement the fix" --effort xhigh --json-result
+```
+
+内置 Codex GPT-5.6 target 只开放 `gpt5.6`（→ `gpt-5.6-sol`）和 `gpt5.6-terra`。这两个模型允许 `low | medium | high | xhigh | max`；最低档 `none` 不开放，其他 GPT-5.6 变体也不放入可用模型列表。`codex` 默认模型仍是 GPT-5.5，不会被替换。
+
+合法值：`auto | none | minimal | low | medium | high | xhigh | max`。省略或 `auto` 表示不覆盖各 CLI 默认。只有当前 provider/模型确认支持的精确档位才会传递；否则回到 `auto`，结果里会带 `requested_effort` / `applied_effort` / `effort_fallback_reason`，不会静默降到相邻档。详见 [Reasoning Effort 设计](docs/reasoning-effort-design.md)。
 
 ## 安全
 

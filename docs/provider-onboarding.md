@@ -28,11 +28,13 @@ internal/cli
   -> routing.Resolve(...)
   -> routing.DispatchTarget
   -> dispatch.providerFor(...)
-  -> providers.BuildRequest
+  -> provider.ResolveEffort(...)
+  -> providers.BuildRequest  (Effort + AppliedModel already resolved)
   -> provider.Build(...)
   -> runtime.CommandSpec
   -> runtime.RunProcess(...)
   -> provider.Parse(...)
+  -> dispatch stamps requested/applied effort on result + route step
   -> contract.ProviderResult
 ```
 
@@ -58,6 +60,7 @@ type DispatchRequest struct {
     TimeoutSeconds         int
     ActivityTimeoutSeconds int
     TaskName               string
+    Effort                 Effort // auto|none|minimal|low|medium|high|xhigh|max
     ProviderOpts           map[string]map[string]string
 }
 ```
@@ -70,6 +73,8 @@ provider adapter 不直接读取 CLI argv。它只通过 `providers.BuildRequest
 - `JSONResult` 由 CLI 输出层处理，adapter 不处理。
 - `StreamProgress` 由 dispatch/runtime 的 stdout/stderr hook 处理，adapter 不处理。
 - `TimeoutSeconds` 和 `ActivityTimeoutSeconds` 由 runtime 统一执行；adapter 只有在底层 CLI 也需要内部 timeout 参数时才读取。
+- `Effort` 由 CLI 校验后在 `ExecuteWithOptions` 入口规范化为空值=`auto`；每个候选执行前调用 `ResolveEffort`，再把 **已解析** 的 `Applied` 写入 `BuildRequest.Effort`。adapter 的 `Build` 不得再决定 effort 降级。
+- effort 能力真源必须 provider-local（已验证模型规则或实时 CLI 查询）。不要新增全局 capability package，也不要把 effort 默认值写进 `config.json`。
 
 ## Routing Target
 
@@ -115,6 +120,7 @@ internal/providers/<provider>/
 ```go
 type Provider interface {
     Name() string
+    ResolveEffort(context.Context, EffortRequest) EffortResolution
     Build(BuildRequest) (runtime.CommandSpec, error)
     Parse(runtime.RunResult, BuildRequest) contract.ProviderResult
 }
@@ -122,9 +128,18 @@ type Provider interface {
 
 `Name()` 返回稳定小写 provider 名，例如 `copilot`。这个名字要和 routing、`providerFor()`、`providerOpts`、probe、registry 里的名字一致。
 
+### ResolveEffort
+
+在进程启动前决定本候选的精确档位。只允许：
+
+1. `applied = requested`（确认支持）
+2. `applied = auto`（auto 请求，或不支持/无法确认）
+
+不要映射相邻档位，不要先执行失败再重试。`AppliedModel` 是交给 Build 的最终模型 token/label；空值表示不发送模型覆盖。`Parse` 不写 effort 字段——dispatch 会统一 stamp。
+
 ### Build
 
-`Build` 只负责把统一请求转成真实命令：
+`Build` 只负责把统一请求转成真实命令；`Effort` 已是解析后的 applied 值：
 
 ```go
 type BuildRequest struct {
@@ -135,6 +150,7 @@ type BuildRequest struct {
     SessionID              string
     TimeoutSeconds         int
     ActivityTimeoutSeconds int
+    Effort                 contract.Effort
     ProviderOptions        map[string]string
 }
 ```
@@ -244,7 +260,7 @@ provider 私有参数统一走：
 
 当前 CLI 在 `internal/cli/cli.go` 的 `validProviderOpt(provider, key)` 做白名单校验。新增 provider option 时必须同步更新这里，否则参数到不了 adapter。
 
-不要为单个 provider 新增顶层 flag，除非它已经是跨 provider 的通用语义。
+不要为单个 provider 新增顶层 flag，除非它已经是跨 provider 的通用语义。`Effort`/`--effort` 就是这种跨 provider 语义；不要再发明 `provider.effort` 双入口。
 
 ## 注册点
 

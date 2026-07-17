@@ -71,6 +71,10 @@ logs/
 - Claude defaults to `claude -p`; PTY is explicit config or provider option.
 - Model routing uses `config.json` `models` first, then the bundled registry, then provider inference.
 
+## Feature Designs
+
+- [Reasoning Effort](docs/reasoning-effort-design.md): reviewed cross-provider effort contract; omitted/auto preserves CLI defaults, and unsupported explicit levels fall back to auto without silent downshifting.
+
 ## Validation
 
 ```bash

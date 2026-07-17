@@ -114,6 +114,27 @@ ai-dispatch resume --session-id <id> "focus on the delta" \
 
 程序化调用应使用 `--json-result`。需要实时进度时加 `--stream-progress`。
 
+## Reasoning effort
+
+跨 provider 统一入口：
+
+```bash
+ai-dispatch send gpt5.6 "implement the fix" --effort xhigh --json-result
+ai-dispatch send codex "review current diff" --effort auto
+```
+
+合法值：`auto | none | minimal | low | medium | high | xhigh | max`。省略与 `--effort auto` 等价，表示不覆盖 CLI/模型默认档位。
+
+规则：
+
+- 只有当前候选确认支持时才传精确档位。
+- 不支持或无法确认时回到 `auto`，绝不映射相邻低档，也不因 effort 失败重跑 provider。
+- 结果字段：`requested_effort`、`applied_effort`、`effort_fallback_reason`。
+- effort fallback **不**设置 `degraded`；`degraded`/`degrade_reason` 只表示路由候选切换。
+- 旧的 `grok.effort` provider option 已移除；使用 `--effort`。
+
+完整设计见 [Reasoning Effort](reasoning-effort-design.md)。
+
 ## 结果字段
 
 调用方不要根据请求 target 推断真实结果，必须读 JSON 字段：
@@ -127,10 +148,13 @@ ai-dispatch resume --session-id <id> "focus on the delta" \
 - `route_trace`
 - `degraded`
 - `degrade_reason`
+- `requested_effort`
+- `applied_effort`
+- `effort_fallback_reason`
 - `session_id`
 - `failure_class`
 
-`session_id` 可用于后续 `resume`。`degraded=true` 表示 ai-dispatch 已按路由策略换过候选。
+`session_id` 可用于后续 `resume`。`degraded=true` 表示 ai-dispatch 已按路由策略换过候选。`requested_effort != applied_effort` 表示发生了 effort fallback，与路由降级独立。
 
 ## 模型路由
 
@@ -201,7 +225,7 @@ ai-dispatch send grok "Reply exactly: OK" \
   --json-result
 ```
 
-支持的 key：`grok.max-turns`、`grok.effort`、`grok.web-search=on|off`、`grok.subagents=on|off`、`grok.approval=always|default`。
+支持的 key：`grok.max-turns`、`grok.web-search=on|off`、`grok.subagents=on|off`、`grok.approval=always|default`。推理档位请用顶层 `--effort`，不要用 `grok.effort`。
 
 默认 `grok.approval=always` 会向 Grok CLI 传 `--always-approve`，用于非交互式 dispatch。处理不可信 prompt 或不希望自动批准工具/文件操作时，传 `--provider-opt grok.approval=default`。
 
@@ -312,6 +336,8 @@ npm publish ./npm/ai-dispatch
 ```
 
 `scripts/release.sh` 会拒绝 npm 包版本与 `skills/ai-dispatch/VERSION` 不一致的构建，并生成 `dist/ai-dispatch.rb`。将它复制到 `rennzhang/homebrew-tap` 的 `Formula/ai-dispatch.rb` 后提交推送。npm publish 与 tap 更新都保持人工显式执行，避免 tag 推送自动向外发布。
+
+release 构建默认拒绝任何 tracked、staged 或 untracked 改动，避免生成带正式版本名的 dirty 包。只有本地验收时可以显式使用 `AI_DISPATCH_ALLOW_DIRTY_LOCAL=1 scripts/release.sh`；这类产物会保留 dirty identity，不能发布。
 
 公开用户可见变更记录维护在 [Changelog](../CHANGELOG.md)。发版前先补对应版本条目，再更新 `skills/ai-dispatch/VERSION`。
 

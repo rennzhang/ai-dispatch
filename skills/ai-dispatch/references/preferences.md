@@ -1,13 +1,13 @@
 # 用户偏好
 
-`~/.ai-dispatch/preferences.md` 是用户自己的场景偏好。Agent 选择 target/model 前先读它，但它不承载可执行路由；短名到 provider/model 的真实映射在 `config.json` 的 `models` 字段里。
+`~/.ai-dispatch/preferences.md` 是用户自己的场景偏好。Agent 选择 target/model 前先读它，但它不承载可执行路由或默认 effort；短名到 provider/model 的真实映射在 `config.json` 的 `models` 字段里。
 
 需要查看用户已经确认并主动加入的本机模型候选池时，读 `~/.ai-dispatch/config.json` 的 `models` 字段。`preferences.md` 只写哪些场景倾向用哪些短名。
 
 ## 用途
 
 - 在真实调用前帮助 Agent 选择默认 target/model 短名。
-- 记录用户反复表达过的模型倾向和场景选择，例如 review、前端 UI、Bug 查找、写文档、代码实现。
+- 记录用户反复表达过的模型倾向、适用场景和极简档位建议，例如 review、前端 UI、Bug 查找、写文档、代码实现。
 - 保持公共 skill 干净：公开安装包不内置具体用户倾向。
 
 ## 使用规则
@@ -24,6 +24,9 @@
 
 - 用 `ai-dispatch preferences open` 打开文件。
 - 用人话写短规则，不写 YAML、schema 或复杂表格。
+- 模型场景和档位写在同一条，例如：`model-a：复杂任务；质量优先。档位：low 快，medium 常规，high 难题。`
+- 每个模型分别写自己的档位说明；内容相同也允许重复，不提取成脱离模型的公共档位规则。
+- 档位只是选择建议，不是配置默认值；只写当前确认支持的档位，真实执行仍以 `--effort` 和返回结果为准。
 - 只记录会反复使用的偏好。
 - 偏好失效时直接删掉，不叠例外。
 - 维护规则写在本子规范里，不写进 `preferences.md` 正文。
@@ -42,7 +45,7 @@ Agent 在真实调用 ai-dispatch 前必须先读这个文件，再选择 target
 
 ## 模型倾向
 
-把你反复使用、值得记住的模型倾向写在这里。
+把你反复使用、值得记住的模型倾向写在这里。每个模型分别写适用场景和极简档位说明。
 
 ## 场景选择
 

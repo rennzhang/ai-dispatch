@@ -64,6 +64,12 @@ ai-dispatch config show
 
 `providers.opencode.catalog_model_count` 只是 catalog 数量摘要，不代表这些模型都经过用户确认或真实可调用。
 
+## 执行边界
+
+默认关闭“无输出超时”；只要 provider 没有明确失败或完成，dispatch 就继续等待。默认仍保留 1800 秒总兜底，可用 `--timeout` 调整；只有显式传 `--activity-timeout` 才启用无活动超时。
+
+收到 `SIGINT`、`SIGTERM` 或 `SIGHUP` 时，dispatch 会终止当前 provider 进程树、停止候选降级，并统一返回 canceled 结果（`exit_code=130`、`next_action=done`）。这里的 130 是 ai-dispatch 的“调用已取消”契约，不用于区分信号来源。
+
 ## Grok provider opts
 
 Grok 的推荐入口是 `config.json models` 里的 `grok` 候选链：第一候选走本机 Grok Build CLI，后续候选可以走 OpenCode/OpenRouter 兜底。
@@ -86,7 +92,7 @@ ai-dispatch send grok "Reply exactly: OK" \
   --json-result
 ```
 
-支持的 key：`grok.max-turns`、`grok.effort`、`grok.web-search=on|off`、`grok.subagents=on|off`、`grok.approval=always|default`。
+支持的 key：`grok.max-turns`、`grok.web-search=on|off`、`grok.subagents=on|off`、`grok.approval=always|default`。Grok 默认 `subagents=off`，只有用户明确要求被派发模型使用子代理时才传 `on`。推理档位使用顶层 `--effort`（`auto|none|minimal|low|medium|high|xhigh|max`），不要用已移除的 `grok.effort`。
 
 默认 `grok.approval=always` 会向 Grok CLI 传 `--always-approve`，用于非交互式 dispatch。处理不可信 prompt 或不希望自动批准工具/文件操作时，传 `--provider-opt grok.approval=default`。
 

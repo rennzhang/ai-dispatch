@@ -49,6 +49,8 @@ scripts/ai-dispatch send <target> "<task>" \
 - review prompt 带真源锚点：diff、文件、日志、命令或明确范围。
 - 长 prompt 先写文件，用 `--prompt-file <path>`。
 - 长任务、review、可追踪任务传 `--task-name`。
+- 默认在 prompt 末尾加一句“不要派发子代理，直接在当前会话完成”。只有用户明确要求被派发模型使用子代理时才去掉这句；Grok 额外传 `--provider-opt grok.subagents=on`。调用多个独立模型不算要求模型内部派发子代理。
+- 需要控制推理档位时传顶层 `--effort <level>`（`auto|none|minimal|low|medium|high|xhigh|max`）。省略或 `auto` 表示不覆盖 CLI 默认；不支持的精确档位会回到 `auto` 并写入 `effort_fallback_reason`，不会静默降到相邻档。不要使用已移除的 `grok.effort`。
 - 外部模型只提供输入；最终裁决由当前 Agent 做。
 
 ## 继续追问
@@ -72,16 +74,21 @@ scripts/ai-dispatch resume --session-id <id> "<delta>" \
 - `route_trace`
 - `degraded`
 - `degrade_reason`
+- `requested_effort`
+- `applied_effort`
+- `effort_fallback_reason`
 - `session_id`
 - `failure_class`
 
-不要根据请求 target 猜真实执行结果。不要在调用方自己实现 fallback。
+不要根据请求 target 猜真实执行结果。不要在调用方自己实现 fallback。`degraded` 只表示路由降级；effort 回退看 `requested_effort`/`applied_effort`。
 
-## 常用目标
+排查多个本地入口是否指向同一构建时，读取运行中 binary 的身份，不要只看 skill 的 `VERSION` 文件：
 
-可直接尝试：`codex`、`opus`、`sonnet`、`gemini-pro`、`grok`、`grok-fast`、`mimo-pro`、`glm`、`kimi`、`qwen`。
+```bash
+scripts/ai-dispatch version --format json
+```
 
-偏好和可用候选以用户本机 `preferences.md` 与 `config.json models` 为准。
+对比 `version`、`revision` 和 `modified`；本地未提交构建会明确带 `+dirty`。
 
 ## 按需读取 reference
 
