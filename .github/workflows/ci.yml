@@ -6,7 +6,11 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -16,12 +20,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: AI_DISPATCH_GO_PROVIDER_EXECUTION=off go test ./...
-      - run: scripts/go_active_caller_check.sh
-      - run: bash -n scripts/install-remote.sh scripts/release.sh scripts/render-homebrew-formula.sh skills/ai-dispatch/scripts/ai-dispatch
-      - run: npm test
-        working-directory: npm/ai-dispatch
-      - run: npm pack --dry-run
-        working-directory: npm/ai-dispatch
+      - run: scripts/quality_gate.sh
       - run: scripts/release.sh
       - run: scripts/check-homebrew-formula.sh

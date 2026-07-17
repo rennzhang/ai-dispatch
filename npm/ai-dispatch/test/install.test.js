@@ -12,10 +12,11 @@ const { promisify } = require("node:util");
 
 const { installBinary } = require("../lib/install");
 const { platformAsset } = require("../lib/platform");
+const packageVersion = require("../package.json").version;
 
 const execFileAsync = promisify(execFile);
 
-async function startReleaseServer(binary, checksum, filename, version = "0.3.0") {
+async function startReleaseServer(binary, checksum, filename, version = packageVersion) {
   const server = createServer((request, response) => {
     if (request.url === `/download/v${version}/SHA256SUMS`) {
       response.end(`${checksum}  ${filename}\n`);
@@ -48,7 +49,7 @@ test("installs a verified platform binary atomically", async (t) => {
 
   const result = await installBinary({
     root,
-    packageJSON: { version: "0.3.0" },
+    packageJSON: { version: packageVersion },
     platform: "linux",
     arch: "x64",
     releaseBaseURL: server.baseURL,
@@ -70,7 +71,7 @@ test("refuses a binary that does not match the release checksum", async (t) => {
   await assert.rejects(
     installBinary({
       root,
-      packageJSON: { version: "0.3.0" },
+      packageJSON: { version: packageVersion },
       platform: "linux",
       arch: "x64",
       releaseBaseURL: server.baseURL,

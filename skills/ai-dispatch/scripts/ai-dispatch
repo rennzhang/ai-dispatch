@@ -44,7 +44,28 @@ esac
 
 CACHE_DIR="${AI_DISPATCH_HOME:-$HOME/.ai-dispatch}/bin"
 CACHED_BIN="$CACHE_DIR/ai-dispatch-go-${VERSION}-${OS}-${ARCH}"
-if [ -x "$CACHED_BIN" ]; then
+
+binary_matches_version() {
+  local binary="$1"
+  local allow_dirty="$2"
+  local identity binary_version revision modified
+  identity="$("$binary" version --format json 2>/dev/null || true)"
+  binary_version="$(printf '%s' "$identity" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')"
+  revision="$(printf '%s' "$identity" | sed -n 's/.*"revision":"\([^"]*\)".*/\1/p')"
+  modified="$(printf '%s' "$identity" | sed -n 's/.*"modified":\([^,}]*\).*/\1/p')"
+  if [ -z "$revision" ]; then
+    return 1
+  fi
+  if [ "$binary_version" = "$VERSION" ] && [ "$modified" = "false" ]; then
+    return 0
+  fi
+  if [ "$allow_dirty" = "yes" ] && [ "$binary_version" = "$VERSION+dirty" ] && [ "$modified" = "true" ]; then
+    return 0
+  fi
+  [ "$allow_dirty" = "yes" ] && [[ "$binary_version" = "$VERSION+dev."* ]] && [ "$modified" = "false" ]
+}
+
+if [ -x "$CACHED_BIN" ] && binary_matches_version "$CACHED_BIN" yes; then
   exec "$CACHED_BIN" "$@"
 fi
 
@@ -60,7 +81,8 @@ sha256_file() {
 }
 
 TARBALL="ai-dispatch-${OS}-${ARCH}.tar.gz"
-BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
+RELEASE_ROOT="${AI_DISPATCH_RELEASE_BASE_URL:-https://github.com/${REPO}/releases}"
+BASE_URL="${RELEASE_ROOT%/}/download/${VERSION}"
 TARBALL_URL="${BASE_URL}/${TARBALL}"
 CHECKSUMS_URL="${BASE_URL}/SHA256SUMS"
 
@@ -104,6 +126,10 @@ if [ -f "$pkgdir/VERSION" ]; then
     echo "ai-dispatch: tarball VERSION mismatch: expected $VERSION, got $pkg_version" >&2
     exit 1
   fi
+fi
+if ! binary_matches_version "$extracted" no; then
+  echo "ai-dispatch: downloaded binary identity does not match VERSION $VERSION" >&2
+  exit 1
 fi
 
 mkdir -p "$CACHE_DIR"

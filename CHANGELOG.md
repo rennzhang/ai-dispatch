@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.4.0
+
+- Add cross-provider top-level `--effort` (`auto|none|minimal|low|medium|high|xhigh|max`). Omitted/`auto` preserves each CLI's default; unsupported explicit levels fall back to `auto` without adjacent-level mapping or provider re-runs.
+- Surface `requested_effort`, `applied_effort`, and `effort_fallback_reason` on results and route steps. Effort fallback does not set `degraded`.
+- Codex no longer hardcodes `model_reasoning_effort=high` when effort is omitted; CLI/model defaults apply.
+- Expose only GPT-5.6 Sol and Terra as built-in/local Codex choices; allow `low|medium|high|xhigh|max`, while `none`, `minimal`, Luna, and unverified models fall back to `auto`.
+- Claude Code does not accept `--effort` today: explicit Claude effort falls back to `auto` with a clear reason, and Build never adds the flag (print or PTY).
+- Remove `grok.effort` provider option in favor of `--effort` (clear migration error).
+- Antigravity only sends `--model` when a model override is resolved; empty model uses the agy default.
+- Disable the inactivity timeout by default while retaining the 1800-second wall-clock safety limit; `--activity-timeout` remains available as an explicit opt-in.
+- Make dispatch cancellation and timeout process-tree aware, preserve provider diagnostics, bound captured output, and surface incomplete cleanup or truncation as warnings.
+- Preserve real elapsed time for provider lock waits and execution-preparation timeouts instead of recording zero-duration failures.
+- Persist send/resume results atomically, add safer run-history filtering and failure summaries, and skip corrupt records with explicit diagnostics.
+- Add bounded, deduplicated progress parsing with terminal done/error semantics that provider output cannot forge.
+- Add machine-readable `version --format json` identity and make installed wrappers reject binaries that do not match their packaged version.
+- Forward interrupt/termination signals through the npm wrapper and strengthen distribution acceptance across direct, skill, npm, and Homebrew entrypoints.
+- Refuse dirty release builds by default; dirty artifacts require the explicit local-only `AI_DISPATCH_ALLOW_DIRTY_LOCAL=1` override and must not be published.
+
 ## v0.3.0
 
 - Add the `ai-dispatch` npm package, so the CLI can be installed with npm or run once through npx.

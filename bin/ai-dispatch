@@ -7,26 +7,24 @@ set -euo pipefail
 # AI_DISPATCH_GO_PROVIDER_EXECUTION=off to skip real provider calls.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CACHE_DIR="${AI_DISPATCH_GO_CACHE_DIR:-${HOME:-/tmp}/.ai-dispatch/cache}/go-build"
+if command -v sha256sum >/dev/null 2>&1; then
+  ROOT_KEY="$(printf '%s' "$ROOT" | sha256sum | awk '{print $1}')"
+else
+  ROOT_KEY="$(printf '%s' "$ROOT" | shasum -a 256 | awk '{print $1}')"
+fi
+CACHE_DIR="${AI_DISPATCH_GO_CACHE_DIR:-${HOME:-/tmp}/.ai-dispatch/cache}/go-build/$ROOT_KEY"
 CACHE_BIN="$CACHE_DIR/ai-dispatch-go"
 
-needs_rebuild=0
-if [[ ! -x "$CACHE_BIN" ]]; then
-  needs_rebuild=1
-elif find "$ROOT/cmd" "$ROOT/internal" -type f -name '*.go' -newer "$CACHE_BIN" -print -quit | grep -q .; then
-  needs_rebuild=1
-elif [[ "$ROOT/go.mod" -nt "$CACHE_BIN" ]]; then
-  needs_rebuild=1
-fi
-
-if [[ "$needs_rebuild" == "1" ]]; then
-  mkdir -p "$CACHE_DIR"
-  tmp_bin="$CACHE_BIN.tmp.$$"
-  (
-    cd "$ROOT"
-    go build -o "$tmp_bin" ./cmd/ai-dispatch
-  )
-  mv "$tmp_bin" "$CACHE_BIN"
-fi
+mkdir -p "$CACHE_DIR"
+tmp_bin="$CACHE_BIN.tmp.$$"
+trap 'rm -f "$tmp_bin"' EXIT
+(
+  cd "$ROOT"
+  VERSION="$(tr -d '[:space:]' <"$ROOT/skills/ai-dispatch/VERSION")"
+  go build -ldflags="-X github.com/rennzhang/ai-dispatch/internal/buildinfo.versionOverride=$VERSION" \
+    -o "$tmp_bin" ./cmd/ai-dispatch
+)
+mv "$tmp_bin" "$CACHE_BIN"
+trap - EXIT
 
 exec "$CACHE_BIN" "$@"

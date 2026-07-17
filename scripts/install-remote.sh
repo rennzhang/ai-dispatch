@@ -12,6 +12,8 @@ set -euo pipefail
 # Environment variables:
 #   AI_DISPATCH_SKILL_TARGET  claude | codex | all | none  (default: all)
 #   AI_DISPATCH_VERSION       release tag or "latest" (default: latest)
+#   AI_DISPATCH_RELEASE_BASE_URL
+#                             release root override for mirrors/testing
 #   AI_DISPATCH_LINK_DIR      directory for ai-dispatch PATH symlink, or "none"
 #                             (default: ~/.local/bin)
 
@@ -39,7 +41,7 @@ esac
 # --- download ---------------------------------------------------------------
 
 TARBALL="ai-dispatch-${OS}-${ARCH}.tar.gz"
-BASE_URL="https://github.com/${REPO}/releases"
+BASE_URL="${AI_DISPATCH_RELEASE_BASE_URL:-https://github.com/${REPO}/releases}"
 if [ "$VERSION" = "latest" ]; then
   TARBALL_URL="${BASE_URL}/latest/download/${TARBALL}"
   CHECKSUMS_URL="${BASE_URL}/latest/download/SHA256SUMS"
@@ -110,6 +112,24 @@ fi
 RELEASE_VERSION="$(tr -d '[:space:]' < "$src_dir/VERSION")"
 if [ -z "$RELEASE_VERSION" ] || [ "$RELEASE_VERSION" = "dev" ]; then
   echo "ai-dispatch: invalid release VERSION in tarball: '$RELEASE_VERSION'" >&2
+  exit 1
+fi
+binary_identity="$("$src_dir/scripts/ai-dispatch-go" version --format json 2>/dev/null || true)"
+binary_version="$(printf '%s' "$binary_identity" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')"
+binary_revision="$(printf '%s' "$binary_identity" | sed -n 's/.*"revision":"\([^"]*\)".*/\1/p')"
+binary_modified="$(printf '%s' "$binary_identity" | sed -n 's/.*"modified":\([^,}]*\).*/\1/p')"
+identity_ok=0
+if [ "$binary_version" = "$RELEASE_VERSION" ] && [ "$binary_modified" = "false" ] && [ -n "$binary_revision" ]; then
+  identity_ok=1
+elif [ "${AI_DISPATCH_ALLOW_DIRTY_LOCAL:-0}" = "1" ] && \
+  [ "$binary_version" = "$RELEASE_VERSION+dirty" ] && [ "$binary_modified" = "true" ] && [ -n "$binary_revision" ]; then
+  identity_ok=1
+elif [ "${AI_DISPATCH_ALLOW_DIRTY_LOCAL:-0}" = "1" ] && \
+  [[ "$binary_version" = "$RELEASE_VERSION+dev."* ]] && [ "$binary_modified" = "false" ] && [ -n "$binary_revision" ]; then
+  identity_ok=1
+fi
+if [ "$identity_ok" != "1" ]; then
+  echo "ai-dispatch: binary identity does not match tarball VERSION $RELEASE_VERSION" >&2
   exit 1
 fi
 

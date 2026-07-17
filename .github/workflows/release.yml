@@ -9,7 +9,26 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  delivery-gate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run delivery quality gate
+        run: scripts/quality_gate.sh
+
+  build:
+    needs: delivery-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,19 +39,29 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Run tests
-        run: |
-          AI_DISPATCH_GO_PROVIDER_EXECUTION=off go test ./...
-      - name: Test npm package
-        working-directory: npm/ai-dispatch
-        run: |
-          npm test
-          npm pack --dry-run
       - name: Build tarballs
         run: |
           tag="${GITHUB_REF#refs/tags/}"
           scripts/release.sh "$tag"
           scripts/check-homebrew-formula.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-dist
+          path: |
+            dist/*.tar.gz
+            dist/*.bin
+            dist/SHA256SUMS
+            dist/ai-dispatch.rb
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-dist
+          path: dist
       - name: Create release and upload assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
