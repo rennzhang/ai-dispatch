@@ -350,6 +350,37 @@ func TestModelsResolveJSON(t *testing.T) {
 	if payload["Provider"] != "codex" && payload["provider"] != "codex" {
 		t.Fatalf("payload=%v", payload)
 	}
+	if payload["fast"] != true {
+		t.Fatalf("gpt5.5 must report fast=true, payload=%v", payload)
+	}
+}
+
+func TestModelsResolveFastCapabilityJSON(t *testing.T) {
+	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	cases := []struct {
+		target string
+		fast   bool
+	}{
+		{target: "gpt5.6-luna", fast: true},
+		{target: "gpt5.5", fast: true},
+		{target: "claude", fast: false},
+		{target: "opencode", fast: false},
+	}
+	for _, tc := range cases {
+		var stdout, stderr bytes.Buffer
+		code := Main([]string{"models", "resolve", tc.target, "--format", "json"}, &stdout, &stderr)
+		if code != 0 {
+			t.Fatalf("target=%s code=%d stdout=%s stderr=%s", tc.target, code, stdout.String(), stderr.String())
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := payload["fast"].(bool)
+		if got != tc.fast {
+			t.Fatalf("target=%s fast=%v want=%v payload=%v", tc.target, got, tc.fast, payload)
+		}
+	}
 }
 
 func TestModelsResolveGrokJSON(t *testing.T) {
@@ -383,6 +414,9 @@ func TestModelsResolveGrokJSON(t *testing.T) {
 	candidates, _ := payload["candidates"].([]any)
 	if len(candidates) != 2 {
 		t.Fatalf("expected configured grok candidate chain, payload=%v", payload)
+	}
+	if payload["fast"] != false {
+		t.Fatalf("grok primary candidate must report fast=false, payload=%v", payload)
 	}
 }
 

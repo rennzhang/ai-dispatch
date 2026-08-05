@@ -47,6 +47,8 @@ func TestResolveGPT56SolAndTerraRegistryTargets(t *testing.T) {
 	}{
 		{target: "gpt5.6", model: "gpt-5.6-sol"},
 		{target: "gpt5.6-terra", model: "gpt-5.6-terra"},
+		{target: "gpt5.6-luna", model: "gpt-5.6-luna"},
+		{target: "luna", model: "gpt-5.6-luna"},
 	}
 	for _, tc := range cases {
 		got, err := Resolve(tc.target, "")

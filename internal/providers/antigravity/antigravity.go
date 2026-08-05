@@ -80,6 +80,10 @@ func (Provider) ResolveEffort(ctx context.Context, req providers.EffortRequest) 
 	return providers.EffortExact(requested, targetLabel)
 }
 
+func (Provider) ResolveFast(_ context.Context, req providers.FastRequest) providers.FastResolution {
+	return providers.FastFallback(req.Requested, "antigravity", req.Model)
+}
+
 // resolveAgyAppliedModel maps known aliases to final agy labels for the dispatch
 // path. Empty model stays empty (no --model override). Unknown values keep the
 // original token so the driver can fail closed at the direct entry boundary.

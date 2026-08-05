@@ -215,6 +215,17 @@ func TestEffortInterspersedFlag(t *testing.T) {
 	}
 }
 
+func TestFastInterspersedFlag(t *testing.T) {
+	var stderr bytes.Buffer
+	req, _, err := parseSend("send", []string{"gpt5.6-luna", "hello", "--fast", "--json-result"}, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !req.Fast || req.Target != "gpt5.6-luna" || req.Prompt != "hello" {
+		t.Fatalf("req=%+v", req)
+	}
+}
+
 func TestCWDValidation(t *testing.T) {
 	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
 	var stdout, stderr bytes.Buffer

@@ -29,6 +29,16 @@ func (Provider) ResolveEffort(_ context.Context, req providers.EffortRequest) pr
 		fmt.Sprintf("effort %s is not supported by codex/%s; applied auto", requested, effortModelLabel(req.Model)))
 }
 
+func (Provider) ResolveFast(_ context.Context, req providers.FastRequest) providers.FastResolution {
+	if !req.Requested {
+		return providers.FastStandard(false)
+	}
+	if codexSupportsFast(req.Model) {
+		return providers.FastExact(true)
+	}
+	return providers.FastFallback(true, "codex", req.Model)
+}
+
 func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 	args := []string{
 		"codex",
@@ -38,6 +48,9 @@ func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 	}
 	if req.Effort != "" && req.Effort != contract.EffortAuto {
 		args = append(args, "-c", fmt.Sprintf(`model_reasoning_effort="%s"`, req.Effort))
+	}
+	if req.Fast {
+		args = append(args, "-c", `service_tier="priority"`)
 	}
 	if req.Target.Model != "" {
 		if strings.HasPrefix(req.Target.Model, "openrouter/") {
@@ -181,7 +194,16 @@ func codexSupportsEffort(model string, effort contract.Effort) bool {
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(model)) {
-	case "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra":
+	case "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
+		return true
+	default:
+		return false
+	}
+}
+
+func codexSupportsFast(model string) bool {
+	switch strings.ToLower(strings.TrimSpace(model)) {
+	case "gpt-5.5", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
 		return true
 	default:
 		return false

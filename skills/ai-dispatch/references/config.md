@@ -70,6 +70,8 @@ ai-dispatch config show
 
 收到 `SIGINT`、`SIGTERM` 或 `SIGHUP` 时，dispatch 会终止当前 provider 进程树、停止候选降级，并统一返回 canceled 结果（`exit_code=130`、`next_action=done`）。这里的 130 是 ai-dispatch 的“调用已取消”契约，不用于区分信号来源。
 
+顶层 `--fast` 对所有 provider 都是合法输入。当前 Codex GPT-5.5/5.6 target 会应用 priority service tier；其他 provider 暂时显式回退到标准速度，并通过 `requested_fast`、`applied_fast`、`fast_fallback_reason` 说明实际行为。fast 不是 `config.json` 默认值，也不改变候选顺序。
+
 ## Grok provider opts
 
 Grok 的推荐入口是 `config.json models` 里的 `grok` 候选链：第一候选走本机 Grok Build CLI，后续候选可以走 OpenCode/OpenRouter 兜底。

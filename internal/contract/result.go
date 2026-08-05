@@ -54,6 +54,8 @@ type RouteStep struct {
 	DurationMS           int64  `json:"duration_ms"`
 	AppliedEffort        Effort `json:"applied_effort,omitempty"`
 	EffortFallbackReason string `json:"effort_fallback_reason,omitempty"`
+	AppliedFast          bool   `json:"applied_fast"`
+	FastFallbackReason   string `json:"fast_fallback_reason,omitempty"`
 }
 
 // ProviderSetupSummary is a redacted view of a single provider's status,
@@ -95,6 +97,9 @@ type ProviderResult struct {
 	RequestedEffort      Effort             `json:"requested_effort,omitempty"`
 	AppliedEffort        Effort             `json:"applied_effort,omitempty"`
 	EffortFallbackReason string             `json:"effort_fallback_reason,omitempty"`
+	RequestedFast        bool               `json:"requested_fast"`
+	AppliedFast          bool               `json:"applied_fast"`
+	FastFallbackReason   string             `json:"fast_fallback_reason,omitempty"`
 	Usage                *UsageInfo         `json:"usage,omitempty"`
 	Cost                 *CostInfo          `json:"cost,omitempty"`
 	ExitCode             int                `json:"exit_code"`

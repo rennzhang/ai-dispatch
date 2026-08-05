@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"strings"
 
+	"github.com/rennzhang/ai-dispatch/internal/dispatch"
 	"github.com/rennzhang/ai-dispatch/internal/routing"
 )
 
@@ -70,5 +72,13 @@ func modelsResolve(argv []string, stdout io.Writer, stderr io.Writer) int {
 	if err != nil {
 		return emitCLIError(stdout, stderr, *format == "json", err.Error(), 2)
 	}
-	return writeJSON(stdout, target, 0)
+	// Enrich with a read-only capability snapshot; do not persist fast into routing types.
+	payload := struct {
+		routing.DispatchTarget
+		Fast bool `json:"fast"`
+	}{
+		DispatchTarget: target,
+		Fast:           dispatch.SupportsFast(context.Background(), target),
+	}
+	return writeJSON(stdout, payload, 0)
 }

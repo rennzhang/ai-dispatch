@@ -225,7 +225,7 @@ support cannot be confirmed
 
 | Provider | 精确档位传递 | `auto` 行为 | 能力真源 |
 | --- | --- | --- | --- |
-| Codex | `-c model_reasoning_effort="<level>"` | 不添加该 config override | 精确 allowlist：仅 Sol（`gpt-5.6` / `gpt-5.6-sol`）与 Terra（`gpt-5.6-terra`）开放 `low/medium/high/xhigh/max`；最低档 `none`、`minimal`、Luna 和其他模型一律 auto |
+| Codex | `-c model_reasoning_effort="<level>"` | 不添加该 config override | 精确 allowlist：Sol（`gpt-5.6` / `gpt-5.6-sol`）、Terra（`gpt-5.6-terra`）与 Luna（`gpt-5.6-luna`）开放 `low/medium/high/xhigh/max`；最低档 `none`、`minimal` 和其他模型一律 auto |
 | Claude print | 当前不传（CLI 不支持） | 不添加 `--effort` | 真实 smoke 证实 Claude Code print 拒绝 `--effort`；显式档位一律 fallback 到 auto，保留 ResolveEffort 合同以便将来 CLI 支持后本地启用 |
 | Claude PTY | 当前不传（CLI 不支持） | 不添加 `--effort` | 与 Claude print 共用 resolver；同样不向真实 `claude` 子命令添加 `--effort` |
 | OpenCode | `--variant <level>` | 不添加 `--variant` | `opencode models <provider> --verbose` 返回的当前模型 variants |
@@ -377,7 +377,7 @@ DispatchRequest(requested_effort=xhigh)
 
 本设计以 2026-07-17 的本机 CLI、真实 smoke 和官方文档为当前事实：
 
-- Codex CLI `0.145.0-alpha.18`：通过 `-c key=value` 覆盖配置；省略 effort 时 ai-dispatch **不再**硬编码 `high`。本地可用模型只开放 Sol 与 Terra，精确档位为 `low/medium/high/xhigh/max`；最低档 `none`、`minimal`、Luna 和其它模型一律 auto。[OpenAI GPT-5.6 model guidance](https://developers.openai.com/api/docs/guides/latest-model)
+- Codex CLI：通过 `-c key=value` 覆盖配置；省略 effort 时 ai-dispatch **不再**硬编码 `high`。本地可用 GPT-5.6 模型开放 Sol、Terra 与 Luna，精确档位为 `low/medium/high/xhigh/max`；最低档 `none`、`minimal` 和其它模型一律 auto。[OpenAI GPT-5.6 model guidance](https://developers.openai.com/api/docs/guides/latest-model)
 - Claude Code：真实 print smoke 显示 `claude -p ... --effort` 返回 `unknown option '--effort'`。因此 ai-dispatch **当前不对 Claude Code CLI 传 `--effort`**；显式 `--effort` 一律 applied auto 并写 fallback reason。Anthropic 文档中的 effort 描述的是 **API/model 语义**，不能当作本机 Claude Code CLI flag 可用性证明。[Anthropic effort documentation (API)](https://platform.claude.com/docs/en/build-with-claude/effort)
 - OpenCode `1.17.18`：`opencode run` 提供 `--variant`，模型目录提供 variants；官方文档明确 variant 是 provider/model-specific，列表并不完整。[OpenCode models and variants](https://opencode.ai/docs/models)
 - Grok CLI `0.2.93`：提供 `--reasoning-effort`；xAI 当前 `grok-4.5` 支持 low/medium/high，省略时默认 high，multi-agent 模型中的 effort 语义是 agent 数量而非推理深度。[xAI reasoning documentation](https://docs.x.ai/developers/model-capabilities/text/reasoning)

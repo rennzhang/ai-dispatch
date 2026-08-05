@@ -29,12 +29,13 @@ internal/cli
   -> routing.DispatchTarget
   -> dispatch.providerFor(...)
   -> provider.ResolveEffort(...)
-  -> providers.BuildRequest  (Effort + AppliedModel already resolved)
+  -> provider.ResolveFast(...)
+  -> providers.BuildRequest  (Effort + Fast + AppliedModel already resolved)
   -> provider.Build(...)
   -> runtime.CommandSpec
   -> runtime.RunProcess(...)
   -> provider.Parse(...)
-  -> dispatch stamps requested/applied effort on result + route step
+  -> dispatch stamps requested/applied effort and fast on result + route step
   -> contract.ProviderResult
 ```
 
@@ -61,6 +62,7 @@ type DispatchRequest struct {
     ActivityTimeoutSeconds int
     TaskName               string
     Effort                 Effort // auto|none|minimal|low|medium|high|xhigh|max
+    Fast                   bool
     ProviderOpts           map[string]map[string]string
 }
 ```
@@ -75,6 +77,7 @@ provider adapter 不直接读取 CLI argv。它只通过 `providers.BuildRequest
 - `TimeoutSeconds` 和 `ActivityTimeoutSeconds` 由 runtime 统一执行；adapter 只有在底层 CLI 也需要内部 timeout 参数时才读取。
 - `Effort` 由 CLI 校验后在 `ExecuteWithOptions` 入口规范化为空值=`auto`；每个候选执行前调用 `ResolveEffort`，再把 **已解析** 的 `Applied` 写入 `BuildRequest.Effort`。adapter 的 `Build` 不得再决定 effort 降级。
 - effort 能力真源必须 provider-local（已验证模型规则或实时 CLI 查询）。不要新增全局 capability package，也不要把 effort 默认值写进 `config.json`。
+- `Fast` 是所有 provider 都接受的统一意图。每个候选执行前调用 `ResolveFast`；只有确认支持时才把 `BuildRequest.Fast` 设为 true，否则以标准速度执行并显式记录 fallback reason。
 
 ## Routing Target
 
@@ -121,6 +124,7 @@ internal/providers/<provider>/
 type Provider interface {
     Name() string
     ResolveEffort(context.Context, EffortRequest) EffortResolution
+    ResolveFast(context.Context, FastRequest) FastResolution
     Build(BuildRequest) (runtime.CommandSpec, error)
     Parse(runtime.RunResult, BuildRequest) contract.ProviderResult
 }
@@ -137,6 +141,10 @@ type Provider interface {
 
 不要映射相邻档位，不要先执行失败再重试。`AppliedModel` 是交给 Build 的最终模型 token/label；空值表示不发送模型覆盖。`Parse` 不写 effort 字段——dispatch 会统一 stamp。
 
+### ResolveFast
+
+每个 provider 都必须实现。确认支持时返回 exact；不支持或无法确认时返回 fallback，当前候选仍以标准速度执行一次。不要因为 fast 不支持而切换 provider，也不要在 `Build` 里重新判断。fallback reason 只写入 `fast_fallback_reason`，不要塞进通用 `warnings`。
+
 ### Build
 
 `Build` 只负责把统一请求转成真实命令；`Effort` 已是解析后的 applied 值：
@@ -151,6 +159,7 @@ type BuildRequest struct {
     TimeoutSeconds         int
     ActivityTimeoutSeconds int
     Effort                 contract.Effort
+    Fast                   bool
     ProviderOptions        map[string]string
 }
 ```

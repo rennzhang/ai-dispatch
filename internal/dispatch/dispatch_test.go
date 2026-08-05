@@ -242,7 +242,7 @@ func TestCanceledRunKeepsParsedMetadataAndSurfacesRuntimeState(t *testing.T) {
 		StderrTruncated:    true,
 		StderrDroppedBytes: 9,
 	}
-	result := providerResultFromRun(p, run, providers.BuildRequest{Target: target}, target, providers.EffortAuto(contract.EffortAuto, target.Model))
+	result := providerResultFromRun(p, run, providers.BuildRequest{Target: target}, target, providers.EffortAuto(contract.EffortAuto, target.Model), providers.FastStandard(false))
 	if result.Text != "partial answer" || result.SessionID != "session-partial" {
 		t.Fatalf("captured provider metadata was lost: %+v", result)
 	}
@@ -713,6 +713,171 @@ func TestEffortFallbackDoesNotSetDegradedOrRetry(t *testing.T) {
 	}
 	if len(result.RouteSteps) != 1 || result.RouteSteps[0].AppliedEffort != contract.EffortAuto {
 		t.Fatalf("route steps=%+v", result.RouteSteps)
+	}
+}
+
+func TestAllProvidersResolveSharedFastIntent(t *testing.T) {
+	tests := []struct {
+		provider string
+		model    string
+		applied  bool
+	}{
+		{provider: "codex", model: "gpt-5.6-luna", applied: true},
+		{provider: "claude", model: "claude-haiku-4-5", applied: false},
+		{provider: "opencode", model: "openrouter/xiaomi/mimo-v2.5-pro", applied: false},
+		{provider: "grok", model: "grok-4.5", applied: false},
+		{provider: "antigravity", model: "gemini-3-flash", applied: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.provider, func(t *testing.T) {
+			provider, ok := providerFor(tc.provider)
+			if !ok {
+				t.Fatalf("provider %q not registered", tc.provider)
+			}
+			got := provider.ResolveFast(context.Background(), providers.FastRequest{Model: tc.model, Requested: true})
+			if !got.Requested || got.Applied != tc.applied {
+				t.Fatalf("resolution=%+v", got)
+			}
+			if tc.applied && (got.Fallback || got.Reason != "") {
+				t.Fatalf("supported fast must be exact: %+v", got)
+			}
+			if !tc.applied && (!got.Fallback || !strings.Contains(got.Reason, "standard speed")) {
+				t.Fatalf("unsupported fast must be explicit fallback: %+v", got)
+			}
+		})
+	}
+}
+
+func TestFastFallbackDoesNotSetDegradedOrRetry(t *testing.T) {
+	t.Setenv("AI_DISPATCH_GO_PROVIDER_EXECUTION", "on")
+	t.Setenv("AI_DISPATCH_GROK_BIN", writeFakeGrokOK(t))
+	t.Setenv("AI_DISPATCH_CONFIG", filepath.Join(t.TempDir(), "missing-config.json"))
+	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	var builds int
+	result := executeCandidatesWith(context.Background(), contract.DispatchRequest{
+		Command: "send",
+		Target:  "grok",
+		Prompt:  "hello",
+		Fast:    true,
+	}, routing.DispatchTarget{Requested: "grok", Provider: "grok", Model: "grok-4.5"}, Options{},
+		func(ctx context.Context, req contract.DispatchRequest, target routing.DispatchTarget, opts Options) contract.ProviderResult {
+			builds++
+			p := grok.Provider{}
+			resolution := p.ResolveFast(ctx, providers.FastRequest{Model: target.Model, Requested: req.Fast})
+			spec, err := p.Build(providers.BuildRequest{
+				Prompt: req.Prompt,
+				Target: target,
+				Fast:   resolution.Applied,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(strings.Join(spec.Args, "\x00"), "--fast") {
+				t.Fatalf("fallback must not pass unsupported fast flag: %#v", spec.Args)
+			}
+			run := execruntime.RunResult{Stdout: []byte(`{"text":"OK","sessionId":"s1"}`), ExitCode: 0, DurationMS: 5}
+			parsed := p.Parse(run, providers.BuildRequest{Target: target, Fast: resolution.Applied})
+			ensureRouteMetadata(&parsed, target, run.DurationMS)
+			applyFastResolution(&parsed, resolution)
+			return parsed
+		})
+	if builds != 1 {
+		t.Fatalf("fast fallback must execute provider once, builds=%d", builds)
+	}
+	if !result.OK || !result.RequestedFast || result.AppliedFast {
+		t.Fatalf("result=%+v", result)
+	}
+	if result.FastFallbackReason == "" || result.Degraded {
+		t.Fatalf("expected explicit fast fallback without route degradation: %+v", result)
+	}
+	for _, warning := range result.Warnings {
+		if strings.Contains(strings.ToLower(warning), "fast") {
+			t.Fatalf("fast capability fallback must not pollute warnings: %v", result.Warnings)
+		}
+	}
+	if len(result.RouteSteps) != 1 || result.RouteSteps[0].AppliedFast || result.RouteSteps[0].FastFallbackReason == "" {
+		t.Fatalf("route steps=%+v", result.RouteSteps)
+	}
+}
+
+func TestFastRequestedSurvivesCandidateFallback(t *testing.T) {
+	target := routing.DispatchTarget{
+		Requested: "multi",
+		Provider:  "grok",
+		Model:     "grok-4.5",
+		Candidates: []routing.RouteCandidate{
+			{Provider: "grok", Model: "grok-4.5"},
+			{Provider: "codex", Model: "gpt-5.6-luna"},
+		},
+	}
+	result := executeCandidatesWith(context.Background(), contract.DispatchRequest{
+		Command: "send",
+		Fast:    true,
+	}, target, Options{},
+		func(ctx context.Context, req contract.DispatchRequest, candidate routing.DispatchTarget, opts Options) contract.ProviderResult {
+			provider, ok := providerFor(candidate.Provider)
+			if !ok {
+				t.Fatalf("provider %q not registered", candidate.Provider)
+			}
+			resolution := provider.ResolveFast(ctx, providers.FastRequest{Model: candidate.Model, Requested: req.Fast})
+			if candidate.Provider == "grok" {
+				failed := contract.ErrorResult(contract.StatusQuota, contract.FailureQuota, "quota", 1)
+				ensureRouteMetadata(&failed, candidate, 1)
+				applyFastResolution(&failed, resolution)
+				return failed
+			}
+			succeeded := contract.SuccessResult("OK")
+			ensureRouteMetadata(&succeeded, candidate, 3)
+			applyFastResolution(&succeeded, resolution)
+			return succeeded
+		})
+	if !result.OK || !result.RequestedFast || !result.AppliedFast {
+		t.Fatalf("result=%+v", result)
+	}
+	if !result.Degraded || result.FastFallbackReason != "" {
+		t.Fatalf("only routing should be degraded after exact final fast candidate: %+v", result)
+	}
+	if len(result.RouteSteps) != 2 {
+		t.Fatalf("route steps=%+v", result.RouteSteps)
+	}
+	if result.RouteSteps[0].AppliedFast || result.RouteSteps[0].FastFallbackReason == "" {
+		t.Fatalf("first candidate should expose fast fallback: %+v", result.RouteSteps[0])
+	}
+	if !result.RouteSteps[1].AppliedFast || result.RouteSteps[1].FastFallbackReason != "" {
+		t.Fatalf("second candidate should apply fast exactly: %+v", result.RouteSteps[1])
+	}
+	for _, warning := range result.Warnings {
+		if strings.Contains(strings.ToLower(warning), "fast") || strings.Contains(warning, "standard speed") {
+			t.Fatalf("successful multi-candidate result must not retain fast capability warnings: %v", result.Warnings)
+		}
+	}
+}
+
+func TestSupportsFastPrimaryCandidate(t *testing.T) {
+	if !SupportsFast(context.Background(), routing.DispatchTarget{
+		Requested: "gpt5.6-luna",
+		Provider:  "codex",
+		Model:     "gpt-5.6-luna",
+	}) {
+		t.Fatal("codex luna must support fast")
+	}
+	if SupportsFast(context.Background(), routing.DispatchTarget{
+		Requested: "grok",
+		Provider:  "grok",
+		Model:     "grok-4.5",
+	}) {
+		t.Fatal("grok must not support fast")
+	}
+	if SupportsFast(context.Background(), routing.DispatchTarget{
+		Requested: "multi",
+		Provider:  "grok",
+		Model:     "grok-4.5",
+		Candidates: []routing.RouteCandidate{
+			{Provider: "grok", Model: "grok-4.5"},
+			{Provider: "codex", Model: "gpt-5.6-luna"},
+		},
+	}) {
+		t.Fatal("SupportsFast must describe the primary candidate only")
 	}
 }
 

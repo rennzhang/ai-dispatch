@@ -46,6 +46,10 @@ func (Provider) ResolveEffort(ctx context.Context, req providers.EffortRequest) 
 		fmt.Sprintf("effort %s is not supported by opencode/%s; applied auto", requested, effortModelLabel(req.Model)))
 }
 
+func (Provider) ResolveFast(_ context.Context, req providers.FastRequest) providers.FastResolution {
+	return providers.FastFallback(req.Requested, "opencode", req.Model)
+}
+
 func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 	format := strings.TrimSpace(req.ProviderOptions["format"])
 	if format == "" {

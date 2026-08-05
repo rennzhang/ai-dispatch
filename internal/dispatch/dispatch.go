@@ -63,8 +63,10 @@ func ExecuteWithOptions(req contract.DispatchRequest, opts Options) contract.Pro
 		result.RequestedTarget = target.Requested
 		result.ProviderUsed = target.Provider
 		resolution := providers.EffortAuto(req.Effort, target.Model)
+		fastResolution := providers.FastUnavailable(req.Fast, "fast mode was not applied because provider execution is disabled")
 		ensureRouteMetadata(&result, target, 0)
 		applyEffortResolution(&result, resolution)
+		applyFastResolution(&result, fastResolution)
 		return completeDispatchResult(req, opts, result)
 	}
 	result := executeCandidates(dispatchCtx, req, target, opts)
@@ -85,6 +87,7 @@ func ExecuteWithOptions(req contract.DispatchRequest, opts Options) contract.Pro
 }
 
 func completeDispatchResult(req contract.DispatchRequest, opts Options, result contract.ProviderResult) contract.ProviderResult {
+	result.RequestedFast = req.Fast
 	if result.RequestedEffort == "" {
 		result.RequestedEffort = contract.NormalizeEffort(req.Effort)
 	}
@@ -218,10 +221,12 @@ func executeTarget(baseCtx context.Context, req contract.DispatchRequest, target
 		result.ProviderUsed = target.Provider
 		ensureRouteMetadata(&result, target, 0)
 		applyEffortResolution(&result, providers.EffortAuto(req.Effort, target.Model))
+		applyFastResolution(&result, providers.FastUnavailable(req.Fast, "fast mode was not applied because the provider is unavailable"))
 		return result
 	}
 	if result, done := contextTargetResult(baseCtx, target, elapsedMS(targetStarted)); done {
 		applyEffortResolution(&result, providers.EffortAuto(req.Effort, target.Model))
+		applyFastResolution(&result, providers.FastUnavailable(req.Fast, "fast mode was not applied because dispatch ended before provider execution"))
 		return result
 	}
 
@@ -233,6 +238,10 @@ func executeTarget(baseCtx context.Context, req contract.DispatchRequest, target
 		ProviderOptions: req.ProviderOpts[target.Provider],
 	})
 	cancelEffort()
+	fastResolution := p.ResolveFast(baseCtx, providers.FastRequest{
+		Model:     target.Model,
+		Requested: req.Fast,
+	})
 
 	buildTarget := target
 	buildTarget.Model = resolution.AppliedModel
@@ -245,6 +254,7 @@ func executeTarget(baseCtx context.Context, req contract.DispatchRequest, target
 		TimeoutSeconds:         req.TimeoutSeconds,
 		ActivityTimeoutSeconds: req.ActivityTimeoutSeconds,
 		Effort:                 resolution.Applied,
+		Fast:                   fastResolution.Applied,
 		ProviderOptions:        req.ProviderOpts[target.Provider],
 	}
 	spec, err := p.Build(buildReq)
@@ -255,10 +265,12 @@ func executeTarget(baseCtx context.Context, req contract.DispatchRequest, target
 		result.ProviderUsed = target.Provider
 		ensureRouteMetadata(&result, buildTarget, 0)
 		applyEffortResolution(&result, resolution)
+		applyFastResolution(&result, fastResolution)
 		return result
 	}
 	if result, done := contextTargetResult(baseCtx, buildTarget, elapsedMS(targetStarted)); done {
 		applyEffortResolution(&result, resolution)
+		applyFastResolution(&result, fastResolution)
 		return result
 	}
 	spec.CWD = req.CWD
@@ -279,17 +291,19 @@ func executeTarget(baseCtx context.Context, req contract.DispatchRequest, target
 	if emitter != nil {
 		emitter.Close()
 	}
-	return providerResultFromRun(p, run, buildReq, buildTarget, resolution)
+	return providerResultFromRun(p, run, buildReq, buildTarget, resolution, fastResolution)
 }
 
-func providerResultFromRun(p providers.Provider, run execruntime.RunResult, buildReq providers.BuildRequest, target routing.DispatchTarget, resolution providers.EffortResolution) contract.ProviderResult {
+func providerResultFromRun(p providers.Provider, run execruntime.RunResult, buildReq providers.BuildRequest, target routing.DispatchTarget, resolution providers.EffortResolution, fastResolution providers.FastResolution) contract.ProviderResult {
 	result := p.Parse(run, buildReq)
 	ensureRouteMetadata(&result, target, run.DurationMS)
 	applyEffortResolution(&result, resolution)
+	applyFastResolution(&result, fastResolution)
 	if run.Canceled {
 		applyCanceledContract(&result, target, run.DurationMS)
 		// Preserve effort fields after cancel rewrite.
 		applyEffortResolution(&result, resolution)
+		applyFastResolution(&result, fastResolution)
 	}
 	applyRuntimeWarnings(&result, run)
 	return result
@@ -332,6 +346,27 @@ func applyEffortResolution(result *contract.ProviderResult, resolution providers
 			result.RouteSteps[i].EffortFallbackReason = resolution.Reason
 		} else {
 			result.RouteSteps[i].EffortFallbackReason = ""
+		}
+	}
+}
+
+// applyFastResolution stamps top-level and route-step fast-mode fields owned by dispatch.
+// Fast fallback is a capability fallback, not a routing degradation, and must not
+// pollute the generic warnings list (structured fields carry the reason).
+func applyFastResolution(result *contract.ProviderResult, resolution providers.FastResolution) {
+	result.RequestedFast = resolution.Requested
+	result.AppliedFast = resolution.Applied
+	if resolution.Fallback {
+		result.FastFallbackReason = resolution.Reason
+	} else {
+		result.FastFallbackReason = ""
+	}
+	for i := range result.RouteSteps {
+		result.RouteSteps[i].AppliedFast = resolution.Applied
+		if resolution.Fallback {
+			result.RouteSteps[i].FastFallbackReason = resolution.Reason
+		} else {
+			result.RouteSteps[i].FastFallbackReason = ""
 		}
 	}
 }
@@ -544,6 +579,26 @@ func providerFor(name string) (providers.Provider, bool) {
 	default:
 		return nil, false
 	}
+}
+
+// SupportsFast reports whether the primary candidate for target can honor --fast.
+// Capability is resolved through the provider adapter; callers must not invent a table.
+func SupportsFast(ctx context.Context, target routing.DispatchTarget) bool {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	primary := target
+	if candidates := routing.CandidateTargets(target); len(candidates) > 0 {
+		primary = candidates[0]
+	}
+	p, ok := providerFor(primary.Provider)
+	if !ok {
+		return false
+	}
+	return p.ResolveFast(ctx, providers.FastRequest{
+		Model:     primary.Model,
+		Requested: true,
+	}).Applied
 }
 
 func buildFailure(err error) (contract.FailureClass, int) {

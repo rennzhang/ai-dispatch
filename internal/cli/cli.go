@@ -95,6 +95,7 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "  --json-result                  write ProviderResult JSON to stdout")
 	fmt.Fprintln(w, "  --stream-progress              write progress NDJSON to stderr")
 	fmt.Fprintln(w, "  --effort level                 reasoning effort: auto|none|minimal|low|medium|high|xhigh|max")
+	fmt.Fprintln(w, "  --fast                         request provider fast mode; unsupported providers use standard speed with fast_fallback_reason")
 	fmt.Fprintln(w, "  --provider-opt key=value        provider option, e.g. claude.transport=print|pty|auto")
 	fmt.Fprintln(w, "  --activity-timeout seconds      fail after no provider activity; 0 disables")
 }
@@ -431,6 +432,7 @@ func parseSend(command string, argv []string, stderr io.Writer) (contract.Dispat
 	activityTimeout := fs.Int("activity-timeout", -1, "seconds without provider activity before failure; 0 disables")
 	taskName := fs.String("task-name", "", "task name")
 	effort := fs.String("effort", "", "reasoning effort: auto|none|minimal|low|medium|high|xhigh|max")
+	fast := fs.Bool("fast", false, "request provider fast mode; unsupported providers use standard speed with fast_fallback_reason")
 	providerOpts := multiFlag{}
 	fs.Var(&providerOpts, "provider-opt", "provider option, e.g. claude.transport=print|pty|auto")
 	if err := fs.Parse(argv); err != nil {
@@ -449,6 +451,7 @@ func parseSend(command string, argv []string, stderr io.Writer) (contract.Dispat
 		StreamProgress:  *streamProgress,
 		TimeoutSeconds:  defaultFixedTimeoutSeconds(firstNonNegative(*timeout, *timeoutShort)),
 		TaskName:        *taskName,
+		Fast:            *fast,
 	}
 	parsedEffort, err := contract.ParseEffort(*effort)
 	if err != nil {
@@ -568,7 +571,7 @@ func isBoolFlag(arg string) bool {
 		name = before
 	}
 	switch name {
-	case "--json-result", "--stream-progress", "--help", "-h":
+	case "--json-result", "--stream-progress", "--fast", "--help", "-h":
 		return true
 	default:
 		return false

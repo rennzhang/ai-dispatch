@@ -46,6 +46,18 @@ func TestBuildCodexArgsExactEffort(t *testing.T) {
 	}
 }
 
+func TestBuildCodexArgsFastUsesPriorityServiceTier(t *testing.T) {
+	target := routing.DispatchTarget{Requested: "gpt5.6-luna", Provider: "codex", Model: "gpt-5.6-luna"}
+	spec, err := Provider{}.Build(providers.BuildRequest{Prompt: "hello", Target: target, Effort: contract.EffortMax, Fast: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "--json", "-c", `model_reasoning_effort="max"`, "-c", `service_tier="priority"`, "--model", "gpt-5.6-luna", "hello"}
+	if strings.Join(spec.Args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("args=%#v want=%#v", spec.Args, want)
+	}
+}
+
 func TestResolveCodexEffort(t *testing.T) {
 	p := Provider{}
 	auto := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "gpt-5.6", Requested: contract.EffortAuto})
@@ -56,7 +68,7 @@ func TestResolveCodexEffort(t *testing.T) {
 	if exact.Applied != contract.EffortXHigh || exact.Fallback {
 		t.Fatalf("exact=%+v", exact)
 	}
-	for _, model := range []string{"gpt-5.6-sol", "gpt-5.6-terra"} {
+	for _, model := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
 		for _, level := range []contract.Effort{contract.EffortLow, contract.EffortMedium, contract.EffortHigh, contract.EffortXHigh, contract.EffortMax} {
 			got := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: model, Requested: level})
 			if got.Applied != level || got.Fallback {
@@ -78,13 +90,23 @@ func TestResolveCodexEffort(t *testing.T) {
 			t.Fatalf("lowest level %s must fall back to auto: %+v", level, got)
 		}
 	}
-	luna := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "gpt-5.6-luna", Requested: contract.EffortHigh})
-	if luna.Applied != contract.EffortAuto || !luna.Fallback {
-		t.Fatalf("unexposed luna must fall back to auto: %+v", luna)
-	}
 	unknown := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "o3", Requested: contract.EffortHigh})
 	if unknown.Applied != contract.EffortAuto || !unknown.Fallback {
 		t.Fatalf("unknown=%+v", unknown)
+	}
+}
+
+func TestResolveCodexFast(t *testing.T) {
+	p := Provider{}
+	for _, model := range []string{"gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+		got := p.ResolveFast(context.Background(), providers.FastRequest{Model: model, Requested: true})
+		if !got.Applied || got.Fallback {
+			t.Fatalf("model %s fast=%+v", model, got)
+		}
+	}
+	unsupported := p.ResolveFast(context.Background(), providers.FastRequest{Model: "o3", Requested: true})
+	if unsupported.Applied || !unsupported.Fallback || !strings.Contains(unsupported.Reason, "standard speed") {
+		t.Fatalf("unsupported=%+v", unsupported)
 	}
 }
 

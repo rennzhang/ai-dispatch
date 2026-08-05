@@ -33,6 +33,10 @@ func (Provider) ResolveEffort(_ context.Context, req providers.EffortRequest) pr
 		fmt.Sprintf("effort %s is not supported by the Claude Code CLI; applied auto", requested))
 }
 
+func (Provider) ResolveFast(_ context.Context, req providers.FastRequest) providers.FastResolution {
+	return providers.FastFallback(req.Requested, "claude", req.Model)
+}
+
 func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 	transport := effectiveTransport(req)
 	if transport == "disabled" {

@@ -33,6 +33,10 @@ func (Provider) ResolveEffort(_ context.Context, req providers.EffortRequest) pr
 		fmt.Sprintf("effort %s is not supported by grok/%s; applied auto", requested, effortModelLabel(req.Model)))
 }
 
+func (Provider) ResolveFast(_ context.Context, req providers.FastRequest) providers.FastResolution {
+	return providers.FastFallback(req.Requested, "grok", req.Model)
+}
+
 func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 	bin, err := grokBinary()
 	if err != nil {

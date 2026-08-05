@@ -19,6 +19,7 @@ type BuildRequest struct {
 	// Effort is the already-resolved applied effort for this candidate.
 	// Providers must not re-decide fallback here; ResolveEffort owns that.
 	Effort          contract.Effort
+	Fast            bool
 	ProviderOptions map[string]string
 }
 
@@ -40,9 +41,25 @@ type EffortResolution struct {
 	Reason       string
 }
 
+// FastRequest is the per-candidate input to ResolveFast.
+type FastRequest struct {
+	Model     string
+	Requested bool
+}
+
+// FastResolution records whether a provider can honor the shared --fast intent.
+// Unsupported providers continue at standard speed and must expose the reason.
+type FastResolution struct {
+	Requested bool
+	Applied   bool
+	Fallback  bool
+	Reason    string
+}
+
 type Provider interface {
 	Name() string
 	ResolveEffort(context.Context, EffortRequest) EffortResolution
+	ResolveFast(context.Context, FastRequest) FastResolution
 	Build(BuildRequest) (runtime.CommandSpec, error)
 	Parse(runtime.RunResult, BuildRequest) contract.ProviderResult
 }
@@ -74,4 +91,30 @@ func EffortFallback(requested contract.Effort, model string, reason string) Effo
 		Fallback:     true,
 		Reason:       reason,
 	}
+}
+
+func FastStandard(requested bool) FastResolution {
+	return FastResolution{Requested: requested}
+}
+
+func FastExact(requested bool) FastResolution {
+	return FastResolution{Requested: requested, Applied: requested}
+}
+
+func FastFallback(requested bool, provider string, model string) FastResolution {
+	if !requested {
+		return FastStandard(false)
+	}
+	label := model
+	if label == "" {
+		label = "default"
+	}
+	return FastUnavailable(true, provider+"/"+label+" does not support fast mode; applied standard speed")
+}
+
+func FastUnavailable(requested bool, reason string) FastResolution {
+	if !requested {
+		return FastStandard(false)
+	}
+	return FastResolution{Requested: true, Fallback: true, Reason: reason}
 }

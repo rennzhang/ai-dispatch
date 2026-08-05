@@ -135,6 +135,20 @@ ai-dispatch send codex "review current diff" --effort auto
 
 完整设计见 [Reasoning Effort](reasoning-effort-design.md)。
 
+## Fast mode
+
+`--fast` 是所有 provider 共用的加速意图：
+
+```bash
+ai-dispatch send gpt5.6-luna "implement the fix" --fast --json-result
+```
+
+- Codex GPT-5.5/5.6 target 通过 `service_tier="priority"` 精确应用。
+- 不支持或无法确认的 provider 仍以标准速度执行当前候选，不重跑、不切换候选。
+- 结果字段：`requested_fast`、`applied_fast`、`fast_fallback_reason`；每个 route step 同时记录本候选是否应用。
+- fast capability fallback 不设置 `degraded`，也不写入通用 `warnings`；`degraded` 仍只表示路由候选切换。
+- 查询能力用 `ai-dispatch models resolve <target> --format json`，读取顶层 `fast: true|false`（primary candidate，经 provider `ResolveFast`）。
+
 ## 结果字段
 
 调用方不要根据请求 target 推断真实结果，必须读 JSON 字段：
@@ -151,10 +165,13 @@ ai-dispatch send codex "review current diff" --effort auto
 - `requested_effort`
 - `applied_effort`
 - `effort_fallback_reason`
+- `requested_fast`
+- `applied_fast`
+- `fast_fallback_reason`
 - `session_id`
 - `failure_class`
 
-`session_id` 可用于后续 `resume`。`degraded=true` 表示 ai-dispatch 已按路由策略换过候选。`requested_effort != applied_effort` 表示发生了 effort fallback，与路由降级独立。
+`session_id` 可用于后续 `resume`。`degraded=true` 表示 ai-dispatch 已按路由策略换过候选。effort fallback 和 fast capability fallback 都与路由降级独立。
 
 ## 模型路由
 

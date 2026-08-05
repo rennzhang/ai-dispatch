@@ -123,7 +123,7 @@ npx skills add rennzhang/ai-dispatch -g --all
 
 ## 模型和偏好
 
-你可以直接说 `opus`、`sonnet`、`codex`、`gemini-pro`、`grok`、`grok-fast`、`mimo-pro`、`glm`、`kimi`、`qwen` 这类短名。
+你可以直接说 `opus`、`sonnet`、`codex`、`gpt5.6-luna`、`gemini-pro`、`grok`、`grok-fast`、`mimo-pro`、`glm`、`kimi`、`qwen` 这类短名。
 
 ai-dispatch 有两个用户态文件：
 
@@ -181,9 +181,19 @@ ai-dispatch 当前内置支持五类本机 CLI provider：
 ai-dispatch send gpt5.6 "implement the fix" --effort xhigh --json-result
 ```
 
-内置 Codex GPT-5.6 target 只开放 `gpt5.6`（→ `gpt-5.6-sol`）和 `gpt5.6-terra`。这两个模型允许 `low | medium | high | xhigh | max`；最低档 `none` 不开放，其他 GPT-5.6 变体也不放入可用模型列表。`codex` 默认模型仍是 GPT-5.5，不会被替换。
+内置 Codex GPT-5.6 target 开放 `gpt5.6`（→ `gpt-5.6-sol`）、`gpt5.6-terra` 和 `gpt5.6-luna`。三个模型都允许 `low | medium | high | xhigh | max`；最低档 `none` 和 `minimal` 不开放。`codex` 默认模型仍是 GPT-5.5，不会被替换。
 
 合法值：`auto | none | minimal | low | medium | high | xhigh | max`。省略或 `auto` 表示不覆盖各 CLI 默认。只有当前 provider/模型确认支持的精确档位才会传递；否则回到 `auto`，结果里会带 `requested_effort` / `applied_effort` / `effort_fallback_reason`，不会静默降到相邻档。详见 [Reasoning Effort 设计](docs/reasoning-effort-design.md)。
+
+## Fast mode
+
+所有 provider 统一接受顶层 `--fast`：
+
+```bash
+ai-dispatch send gpt5.6-luna "implement the fix" --fast --json-result
+```
+
+当前 Codex GPT-5.5/5.6 target 会应用 priority service tier。其他 provider 暂未确认有等价能力时仍按标准速度执行一次，并在结果里明确返回 `requested_fast=true`、`applied_fast=false` 和 `fast_fallback_reason`；不会静默声称已加速，也不会因此设置 `degraded` 或写入通用 `warnings`。切换前可用 `ai-dispatch models resolve <target> --format json` 读顶层 `fast`。
 
 ## 安全
 

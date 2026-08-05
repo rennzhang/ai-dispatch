@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add GPT-5.6 Luna as a built-in Codex target with exact `low|medium|high|xhigh|max` effort support.
+- Add cross-provider `--fast`. Codex GPT-5.5/5.6 targets apply the priority service tier; unsupported providers continue once at standard speed and expose `requested_fast`, `applied_fast`, and `fast_fallback_reason` without setting `degraded`.
+
 ## v0.4.0
 
 - Add cross-provider top-level `--effort` (`auto|none|minimal|low|medium|high|xhigh|max`). Omitted/`auto` preserves each CLI's default; unsupported explicit levels fall back to `auto` without adjacent-level mapping or provider re-runs.
