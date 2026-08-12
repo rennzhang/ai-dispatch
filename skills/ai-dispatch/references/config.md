@@ -47,7 +47,7 @@ ai-dispatch init --force
 |---|---|
 | `claude_transport` | Claude 调用方式：`print`、`pty`、`auto`、`disabled` |
 | `models` | 用户已经确认并主动加入的本机模型候选池；key 是短名，value 是按顺序尝试的候选数组 |
-| `models.<name>[].provider` | 真实 provider：`codex`、`claude`、`opencode`、`antigravity`、`grok` |
+| `models.<name>[].provider` | 真实 provider：`codex`、`claude`、`opencode`、`antigravity`、`grok`、`cursor` |
 | `models.<name>[].model` | 传给底层 provider CLI 的真实 model id |
 | `providers` | provider CLI 诊断摘要，由 `init` 或 `providers scan` 更新 |
 | `providers.<name>.available` | provider CLI 是否看起来可执行 |

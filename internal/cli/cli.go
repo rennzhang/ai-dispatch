@@ -280,7 +280,7 @@ func printSetupSummary(stderr io.Writer, s *setup.Summary) {
 		return
 	}
 	fmt.Fprintln(stderr, "  Provider 探测:")
-	for _, name := range []string{"claude", "codex", "opencode", "antigravity", "grok"} {
+	for _, name := range []string{"claude", "codex", "opencode", "antigravity", "grok", "cursor"} {
 		ps, ok := s.Providers[name]
 		if !ok {
 			continue
@@ -342,7 +342,8 @@ func prepareRequest(req *contract.DispatchRequest, stdin io.Reader) error {
 	if req.CWD != "" {
 		info, err := os.Stat(req.CWD)
 		if err != nil {
-			return fmt.Errorf("--cwd is not accessible: %w", err)
+			// Do not wrap the raw OS error: it embeds the absolute path.
+			return fmt.Errorf("--cwd is not accessible")
 		}
 		if !info.IsDir() {
 			return fmt.Errorf("--cwd must be a directory")
@@ -351,7 +352,8 @@ func prepareRequest(req *contract.DispatchRequest, stdin io.Reader) error {
 	if req.PromptFile != "" {
 		data, err := os.ReadFile(req.PromptFile)
 		if err != nil {
-			return fmt.Errorf("cannot read --prompt-file: %w", err)
+			// Do not wrap the raw OS error: it embeds the absolute path.
+			return fmt.Errorf("cannot read --prompt-file")
 		}
 		if len(data) > 2_000_000 {
 			return fmt.Errorf("--prompt-file is too large; keep it under 2MB")
@@ -366,7 +368,7 @@ func prepareRequest(req *contract.DispatchRequest, stdin io.Reader) error {
 	}
 	data, err := io.ReadAll(stdin)
 	if err != nil {
-		return fmt.Errorf("cannot read stdin: %w", err)
+		return fmt.Errorf("cannot read stdin")
 	}
 	req.Prompt = string(data)
 	return validatePrompt(req.Prompt)
@@ -645,6 +647,8 @@ func validProviderOpt(provider string, key string) bool {
 		default:
 			return false
 		}
+	case "cursor":
+		return key == "approval"
 	default:
 		return false
 	}

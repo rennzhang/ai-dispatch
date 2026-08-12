@@ -68,6 +68,54 @@ func TestResolveGPT56SolAndTerraRegistryTargets(t *testing.T) {
 	}
 }
 
+func TestResolveCursorRegistryTargets(t *testing.T) {
+	isolateConfig(t)
+	cases := []struct {
+		target string
+		model  string
+	}{
+		{target: "cursor-fable5", model: "claude-fable-5-thinking-high"},
+		{target: "cursor-fable", model: "claude-fable-5-thinking-high"},
+		{target: "fable5-cursor", model: "claude-fable-5-thinking-high"},
+		{target: "cursor/claude-fable-5", model: "claude-fable-5-thinking-high"},
+		{target: "claude-fable5-cursor", model: "claude-fable-5-thinking-high"},
+		{target: "claude-fable-5-cursor", model: "claude-fable-5-thinking-high"},
+		{target: "cursor-opus5", model: "claude-opus-5-thinking-high"},
+		{target: "cursor-opus", model: "claude-opus-5-thinking-high"},
+		{target: "opus5-cursor", model: "claude-opus-5-thinking-high"},
+		{target: "cursor/claude-opus-5", model: "claude-opus-5-thinking-high"},
+		{target: "claude-opus5-cursor", model: "claude-opus-5-thinking-high"},
+		{target: "claude-opus-5-cursor", model: "claude-opus-5-thinking-high"},
+		{target: "cursor-sonnet5", model: "claude-sonnet-5-thinking-high"},
+		{target: "cursor-sonnet", model: "claude-sonnet-5-thinking-high"},
+		{target: "sonnet5-cursor", model: "claude-sonnet-5-thinking-high"},
+		{target: "cursor/claude-sonnet-5", model: "claude-sonnet-5-thinking-high"},
+		{target: "claude-sonnet5-cursor", model: "claude-sonnet-5-thinking-high"},
+		{target: "claude-sonnet-5-cursor", model: "claude-sonnet-5-thinking-high"},
+		{target: "cursor-composer", model: "composer-2.5"},
+	}
+	for _, tc := range cases {
+		got, err := Resolve(tc.target, "")
+		if err != nil {
+			t.Fatalf("Resolve(%q): %v", tc.target, err)
+		}
+		if got.Provider != "cursor" || got.Model != tc.model || got.Source != "registry" {
+			t.Fatalf("Resolve(%q)=%+v want provider=cursor model=%s source=registry", tc.target, got, tc.model)
+		}
+	}
+}
+
+func TestResolveBareCursorTarget(t *testing.T) {
+	isolateConfig(t)
+	target, err := Resolve("cursor", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Provider != "cursor" || target.Model != "composer-2.5" {
+		t.Fatalf("target=%+v", target)
+	}
+}
+
 func TestRejectModelWithModelTarget(t *testing.T) {
 	isolateConfig(t)
 	if _, err := Resolve("gpt-5.5", "other"); err == nil {

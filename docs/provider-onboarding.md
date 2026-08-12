@@ -13,8 +13,9 @@ ai-dispatch 不关心某个外部 CLI 自己怎么设计。接入者需要自己
 - `opencode`：`opencode run`
 - `antigravity`：`agy --print`，通过内置 `__agy-driver` 包装
 - `grok`：`grok --output-format json`
+- `cursor`：`cursor-agent --print --output-format json`
 
-新 CLI，例如 Copilot CLI、Cursor CLI、Augment CLI、Kimi CLI，应该新增 provider adapter。不要把新 CLI 伪装成 `codex`、`opencode` 或其他已有 provider。
+新 CLI，例如 Copilot CLI、Augment CLI、Kimi CLI，应该新增 provider adapter。不要把新 CLI 伪装成 `codex`、`opencode` 或其他已有 provider。
 
 当前不开放插件式 external provider protocol。新增 provider 走源码 adapter、测试、release 或 PR。
 

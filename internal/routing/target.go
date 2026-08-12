@@ -70,6 +70,15 @@ func Resolve(rawTarget string, explicitModel string) (DispatchTarget, error) {
 			}
 		}
 		return providerTarget(target, "grok", model)
+	case "cursor":
+		if model == "" {
+			var err error
+			model, err = defaultProviderModel("cursor")
+			if err != nil {
+				return DispatchTarget{}, err
+			}
+		}
+		return providerTarget(target, "cursor", model)
 	case "gemini":
 		if model == "" {
 			var err error
@@ -352,6 +361,7 @@ func defaultProviderModel(provider string) (string, error) {
 		"codex":       "gpt5.5",
 		"antigravity": "gemini-flash",
 		"grok":        "grok4.5",
+		"cursor":      "cursor-composer",
 	}[provider]
 	if key == "" {
 		return "", nil
@@ -452,7 +462,7 @@ func ConfigModelTargets() []string {
 func SupportedTargets() []string {
 	seen := map[string]bool{}
 	targets := []string{}
-	for _, target := range append([]string{"codex", "opencode", "claude", "antigravity", "gemini", "gemini-flash", "gemini-pro", "grok"}, RegistryTargets()...) {
+	for _, target := range append([]string{"codex", "opencode", "claude", "antigravity", "gemini", "gemini-flash", "gemini-pro", "grok", "cursor"}, RegistryTargets()...) {
 		if target == "" || seen[target] {
 			continue
 		}
@@ -495,7 +505,7 @@ func entryModelForProvider(entry registryEntry, provider string) string {
 
 func implementedProvider(provider string) bool {
 	switch provider {
-	case "codex", "opencode", "claude", "antigravity", "grok":
+	case "codex", "opencode", "claude", "antigravity", "grok", "cursor":
 		return true
 	default:
 		return false

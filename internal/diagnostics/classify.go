@@ -59,7 +59,32 @@ func Classify(provider string, stdout string, stderr string, runError string) Fa
 		"do not have access to this model",
 	):
 		class = contract.FailureConfig
-	case containsAny(combined, "no such host", "network is unreachable", "connection refused", "connection reset", "tls handshake", "temporary failure", "timeout awaiting response"):
+	case strings.EqualFold(provider, "Cursor") && containsAny(combined,
+		"no models available for this account",
+		"workspace trust required",
+		"please run 'cursor-agent login'",
+		"invalid model",
+		"model not found",
+		"model does not exist",
+		"not available for your account",
+		"do not have access to this model",
+	):
+		class = contract.FailureConfig
+	case containsAny(combined,
+		"no such host",
+		"network is unreachable",
+		"connection refused",
+		"connection reset",
+		"tls handshake",
+		"temporary failure",
+		"timeout awaiting response",
+		"enotfound",
+		"econnrefused",
+		"etimedout",
+		"fetch failed",
+		"network error",
+		"connection failed repeatedly",
+	):
 		class = contract.FailureNetwork
 	case containsAny(combined, "executable file not found", "command not found", "no such file or directory"):
 		class = contract.FailureConfig

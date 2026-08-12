@@ -248,6 +248,35 @@ ai-dispatch send grok "Reply exactly: OK" \
 
 旧的 `grok-build-0.1` 不再作为直接 target。需要原生 Grok Build CLI 时用 `grok` 或 `grok-fast`；需要直接走 OpenRouter 时，用 `opencode --model openrouter/x-ai/grok-4.5`。
 
+## Cursor provider opts
+
+Cursor 走本机 `cursor-agent --print --output-format json`，模型 ID 自带推理档位后缀（如 `claude-fable-5-thinking-high`、`claude-opus-5-thinking-high`），不接收 `--effort` 精确档位；需要其它档位时换用带对应后缀的短名。
+
+推荐配置：
+
+```json
+{
+  "models": {
+    "cursor-fable5": [
+      { "provider": "cursor", "model": "claude-fable-5-thinking-high" }
+    ],
+    "fable": [
+      { "provider": "claude", "model": "claude-fable-5" },
+      { "provider": "cursor", "model": "claude-fable-5-thinking-high" }
+    ]
+  }
+}
+```
+
+推荐入口：第一候选走 Claude 原生，后续候选走 Cursor 订阅做 fallback；`cursor-fable5` 这类短名直接强制走 Cursor。
+
+```bash
+ai-dispatch send cursor-fable5 "Reply exactly: OK" --json-result
+ai-dispatch send cursor-fable5 "Reply exactly: OK" --provider-opt cursor.approval=always
+```
+
+`cursor.approval` 支持 `default`（只信任工作区，不自动批准工具/文件操作）和 `always`（追加 `--force` 全自动执行）。默认 `default`。
+
 ## Run history
 
 ```bash

@@ -29,6 +29,7 @@ var providerSpecs = map[string]providerSpec{
 	"opencode":    {binary: "opencode", envOverride: "AI_DISPATCH_OPENCODE_BIN", fallbacks: []string{"~/.opencode/bin/opencode"}, listsModels: true},
 	"antigravity": {binary: "agy", envOverride: "AI_DISPATCH_AGY_BIN", fallbacks: []string{"~/.local/bin/agy"}},
 	"grok":        {binary: "grok", envOverride: "AI_DISPATCH_GROK_BIN", fallbacks: []string{"~/.grok/bin/grok", "~/.local/bin/grok"}},
+	"cursor":      {binary: "cursor-agent", envOverride: "AI_DISPATCH_CURSOR_BIN", fallbacks: []string{"~/.local/bin/cursor-agent", "~/.cursor/bin/cursor-agent"}},
 }
 
 // ProbeAll probes every provider in providerSpecs and returns a ProvidersConfig.

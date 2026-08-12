@@ -2,7 +2,7 @@
 
 把一个 AI Agent 的任务，顺手派给另一家本机 AI CLI。
 
-Claude、Codex、OpenCode、Antigravity/Gemini、Grok 在 ai-dispatch 里都是同级 provider。你不用关心底层命令怎么拼，只要告诉当前 Agent：“用 ai-dispatch 找 Claude / Codex / OpenCode / Gemini / Grok 看一下”。
+Claude、Codex、OpenCode、Antigravity/Gemini、Grok、Cursor 在 ai-dispatch 里都是同级 provider。你不用关心底层命令怎么拼，只要告诉当前 Agent：“用 ai-dispatch 找 Claude / Codex / OpenCode / Gemini / Grok / Cursor 看一下”。
 
 适合：
 
@@ -123,7 +123,7 @@ npx skills add rennzhang/ai-dispatch -g --all
 
 ## 模型和偏好
 
-你可以直接说 `opus`、`sonnet`、`codex`、`gpt5.6-luna`、`gemini-pro`、`grok`、`grok-fast`、`mimo-pro`、`glm`、`kimi`、`qwen` 这类短名。
+你可以直接说 `opus`、`sonnet`、`codex`、`gpt5.6-luna`、`gemini-pro`、`grok`、`grok-fast`、`cursor-fable5`、`cursor-opus5`、`cursor-sonnet5`、`cursor-composer`、`mimo-pro`、`glm`、`kimi`、`qwen` 这类短名。
 
 ai-dispatch 有两个用户态文件：
 
@@ -150,7 +150,7 @@ review 场景优先用 <review-target>；代码实现优先用 <coding-target>�
 
 ## 当前支持的 provider
 
-ai-dispatch 当前内置支持五类本机 CLI provider：
+ai-dispatch 当前内置支持六类本机 CLI provider：
 
 | Provider | 底层 CLI | 常见用途 |
 | --- | --- | --- |
@@ -159,6 +159,7 @@ ai-dispatch 当前内置支持五类本机 CLI provider：
 | OpenCode | `opencode run` | OpenRouter / OpenAI / Google 等模型 |
 | Antigravity/Gemini | `agy --print` | Gemini / Antigravity 视角 |
 | Grok | `grok --output-format json` | Grok Build CLI，快速实现、分析、并行探索 |
+| Cursor | `cursor-agent --print --output-format json` | Cursor 订阅内 Claude/GPT/Gemini/Kimi/Composer 模型 |
 
 想接入更多 CLI provider 或参与贡献，见 [issue #1](https://github.com/rennzhang/ai-dispatch/issues/1)。
 
@@ -200,3 +201,5 @@ ai-dispatch send gpt5.6-luna "implement the fix" --fast --json-result
 ai-dispatch 调的是你本机已安装的 AI CLI。某些 provider 可以读写文件或执行命令；只在你愿意交给这些 CLI 的工作区里使用。
 
 Grok provider 为了非交互式执行默认使用 `grok.approval=always`。处理不可信 prompt 或不希望自动批准工具/文件操作时，传 `--provider-opt grok.approval=default`。
+
+Cursor provider 默认只信任工作区（`--trust`），不自动批准工具/文件操作；需要全自动执行时显式传 `--provider-opt cursor.approval=always`。Cursor 模型 ID 自带推理档位后缀（如 `claude-fable-5-thinking-high`），不接收 `--effort` 精确档位；需要其它档位时换用带对应后缀的短名。

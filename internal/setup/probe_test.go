@@ -85,3 +85,29 @@ func TestProbeOneKnowsGrok(t *testing.T) {
 		t.Fatalf("status=%+v", status)
 	}
 }
+
+func TestProbeOneKnowsCursor(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "cursor-agent")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho '2026.06.03-0bbb28e'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AI_DISPATCH_CURSOR_BIN", bin)
+	status, ok := ProbeOne("cursor", false)
+	if !ok {
+		t.Fatal("cursor probe not found")
+	}
+	if !status.Available || status.Version != "2026.06.03-0bbb28e" {
+		t.Fatalf("status=%+v", status)
+	}
+}
+
+func TestProbeCursorMissingReportsUnavailable(t *testing.T) {
+	t.Setenv("AI_DISPATCH_CURSOR_BIN", filepath.Join(t.TempDir(), "missing-cursor-agent"))
+	status, ok := ProbeOne("cursor", false)
+	if !ok {
+		t.Fatal("cursor probe not found")
+	}
+	if status.Available {
+		t.Fatalf("expected unavailable: %+v", status)
+	}
+}

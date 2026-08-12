@@ -110,6 +110,48 @@ func TestClassifyAntigravityRegionAndAccountFailuresAsConfig(t *testing.T) {
 	}
 }
 
+func TestClassifyCursorNoModelsAsConfig(t *testing.T) {
+	got := Classify("Cursor", "", "No models available for this account.", "")
+	if got.Status != contract.StatusError || got.Class != contract.FailureConfig {
+		t.Fatalf("got=%+v", got)
+	}
+}
+
+func TestClassifyCursorWorkspaceTrustAsConfig(t *testing.T) {
+	got := Classify("Cursor", "", "Workspace Trust Required. Do you trust the contents of this directory?", "")
+	if got.Status != contract.StatusError || got.Class != contract.FailureConfig {
+		t.Fatalf("got=%+v", got)
+	}
+}
+
+func TestClassifyCursorInvalidModelAsConfig(t *testing.T) {
+	got := Classify("Cursor", "", "invalid model: claude-fable-5-unknown", "")
+	if got.Status != contract.StatusError || got.Class != contract.FailureConfig {
+		t.Fatalf("got=%+v", got)
+	}
+}
+
+func TestClassifyCursorAuthFailureAsConfig(t *testing.T) {
+	got := Classify("Cursor", "", "Not logged in. Please run 'cursor-agent login'.", "")
+	if got.Status != contract.StatusError || got.Class != contract.FailureConfig {
+		t.Fatalf("got=%+v", got)
+	}
+}
+
+func TestClassifyCursorNodeNetworkErrorsAsNetwork(t *testing.T) {
+	cases := []string{
+		"fetch failed: ENOTFOUND api2.cursor.sh",
+		"Connection failed repeatedly: ECONNREFUSED 127.0.0.1:7897",
+		"network error: ETIMEDOUT",
+	}
+	for _, stderr := range cases {
+		got := Classify("Cursor", "", stderr, "")
+		if got.Status != contract.StatusError || got.Class != contract.FailureNetwork {
+			t.Fatalf("Classify(%q)=%+v want network", stderr, got)
+		}
+	}
+}
+
 func TestNoResultMessageSummarizesStreamShape(t *testing.T) {
 	got := NoResultMessage("OpenCode", "{\"type\":\"session.updated\"}\n{\"event\":\"done\"}\nplain\n", "", 1)
 	for _, want := range []string{"stdout_events=2", "last_event=done", "non_json_stdout_lines=1", "exit_code=1"} {

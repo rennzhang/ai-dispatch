@@ -39,6 +39,7 @@ var allowedEnvPrefixes = []string{
 	"GEMINI_",
 	"GROK_",
 	"XAI_",
+	"CURSOR_",
 }
 
 // SanitizedEnv returns the default environment for provider subprocesses. It

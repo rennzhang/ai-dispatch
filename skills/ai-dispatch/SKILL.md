@@ -7,7 +7,7 @@ description: 通过 ai-dispatch 把任务派发给本机已安装的 AI coding C
 
 使用当前 skill 目录下的 `scripts/ai-dispatch`，不要调用源码路径。
 
-Claude、Codex、OpenCode、Antigravity/Gemini、Grok 在这里都是同级 provider。用户说“找 Claude 看一下”“让 Codex 实现”“叫 Gemini 补个视角”“OpenCode 也 review 一下”“让 Grok 快速试一版”，都可以用 ai-dispatch 派发。
+Claude、Codex、OpenCode、Antigravity/Gemini、Grok、Cursor 在这里都是同级 provider。用户说“找 Claude 看一下”“让 Codex 实现”“叫 Gemini 补个视角”“OpenCode 也 review 一下”“让 Grok 快速试一版”“用 Cursor 里的 Fable 试一版”，都可以用 ai-dispatch 派发。
 
 ## 调用前
 

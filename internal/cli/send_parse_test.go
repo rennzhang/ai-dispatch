@@ -11,8 +11,9 @@ import (
 
 func TestPromptFileIsValidatedBeforeProviderExecution(t *testing.T) {
 	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	missing := filepath.Join(t.TempDir(), "missing.md")
 	var stdout, stderr bytes.Buffer
-	code := Main([]string{"send", "gpt5.5", "--prompt-file", t.TempDir() + "/missing.md", "--json-result"}, &stdout, &stderr)
+	code := Main([]string{"send", "gpt5.5", "--prompt-file", missing, "--json-result"}, &stdout, &stderr)
 	if code != 2 {
 		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -22,6 +23,24 @@ func TestPromptFileIsValidatedBeforeProviderExecution(t *testing.T) {
 	}
 	if payload["next_action"] != "fix_input" {
 		t.Fatalf("payload=%v", payload)
+	}
+	joined := stdout.String() + stderr.String()
+	if strings.Contains(joined, missing) {
+		t.Fatalf("prompt-file absolute path leaked into output: %s", joined)
+	}
+}
+
+func TestCwdIsValidatedWithoutLeakingAbsolutePath(t *testing.T) {
+	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	missing := filepath.Join(t.TempDir(), "missing-dir")
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"send", "gpt5.5", "--cwd", missing, "--json-result"}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	joined := stdout.String() + stderr.String()
+	if strings.Contains(joined, missing) {
+		t.Fatalf("cwd absolute path leaked into output: %s", joined)
 	}
 }
 
@@ -107,6 +126,22 @@ func TestDefaultFixedTimeoutIsSet(t *testing.T) {
 func TestInvalidProviderOptFails(t *testing.T) {
 	var stderr bytes.Buffer
 	_, _, err := parseSend("send", []string{"gpt5.5", "hello", "--provider-opt", "claude.transprot=pty"}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "unsupported provider option") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestCursorProviderOptWhitelist(t *testing.T) {
+	var stderr bytes.Buffer
+	req, _, err := parseSend("send", []string{"cursor-fable5", "hello", "--provider-opt", "cursor.approval=always"}, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.ProviderOpts == nil || req.ProviderOpts["cursor"]["approval"] != "always" {
+		t.Fatalf("req=%+v", req)
+	}
+
+	_, _, err = parseSend("send", []string{"cursor-fable5", "hello", "--provider-opt", "cursor.effort=high"}, &stderr)
 	if err == nil || !strings.Contains(err.Error(), "unsupported provider option") {
 		t.Fatalf("err=%v", err)
 	}

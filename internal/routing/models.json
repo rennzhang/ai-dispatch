@@ -326,6 +326,79 @@
         "deepseek/deepseek-v4-pro",
         "openrouter/deepseek/deepseek-v4-pro"
       ]
+    },
+    {
+      "key": "cursor-fable5",
+      "label": "cursor-fable5",
+      "actualModelId": "claude-fable-5-thinking-high",
+      "provider": "cursor",
+      "providerTitle": "Cursor",
+      "shortLabel": "cursor-fable5",
+      "fullLabel": "Cursor Claude Fable 5 (Thinking High)",
+      "dispatchRunner": "cursor",
+      "dispatchModel": "claude-fable-5-thinking-high",
+      "aliases": [
+        "cursor-fable",
+        "cursor-fable5",
+        "fable5-cursor",
+        "cursor/claude-fable-5",
+        "claude-fable5-cursor",
+        "claude-fable-5-cursor"
+      ]
+    },
+    {
+      "key": "cursor-opus5",
+      "label": "cursor-opus5",
+      "actualModelId": "claude-opus-5-thinking-high",
+      "provider": "cursor",
+      "providerTitle": "Cursor",
+      "shortLabel": "cursor-opus5",
+      "fullLabel": "Cursor Claude Opus 5 (Thinking High)",
+      "dispatchRunner": "cursor",
+      "dispatchModel": "claude-opus-5-thinking-high",
+      "aliases": [
+        "cursor-opus",
+        "cursor-opus5",
+        "opus5-cursor",
+        "cursor/claude-opus-5",
+        "claude-opus5-cursor",
+        "claude-opus-5-cursor"
+      ]
+    },
+    {
+      "key": "cursor-sonnet5",
+      "label": "cursor-sonnet5",
+      "actualModelId": "claude-sonnet-5-thinking-high",
+      "provider": "cursor",
+      "providerTitle": "Cursor",
+      "shortLabel": "cursor-sonnet5",
+      "fullLabel": "Cursor Claude Sonnet 5 (Thinking High)",
+      "dispatchRunner": "cursor",
+      "dispatchModel": "claude-sonnet-5-thinking-high",
+      "aliases": [
+        "cursor-sonnet",
+        "cursor-sonnet5",
+        "sonnet5-cursor",
+        "cursor/claude-sonnet-5",
+        "claude-sonnet5-cursor",
+        "claude-sonnet-5-cursor"
+      ]
+    },
+    {
+      "key": "cursor-composer",
+      "label": "cursor-composer",
+      "actualModelId": "composer-2.5",
+      "provider": "cursor",
+      "providerTitle": "Cursor",
+      "shortLabel": "cursor-composer",
+      "fullLabel": "Cursor Composer 2.5",
+      "dispatchRunner": "cursor",
+      "dispatchModel": "composer-2.5",
+      "aliases": [
+        "cursor-composer2.5",
+        "composer-cursor",
+        "cursor/composer-2.5"
+      ]
     }
   ]
 }

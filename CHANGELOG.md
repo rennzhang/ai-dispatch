@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## v0.6.0
+
+- Add native Cursor provider (`cursor-agent --print --output-format json`) with subscription model routing: `cursor-fable5`, `cursor-opus5`, `cursor-sonnet5`, `cursor-composer`, plus Fable/Opus/Sonnet aliases and `cursor` bare target defaulting to Composer.
+- Add `cursor.approval=always|default` provider option; default trusts the workspace without auto-approving tool/file operations.
+- Preserve Cursor JSON error body as provider stderr; classify Node network errors (`ENOTFOUND`, `ECONNREFUSED`, `ETIMEDOUT`, `fetch failed`, `network error`) as `network` so candidate fallback works.
+- Sanitize prompt-file and workspace paths from CLI errors, Cursor stderr, JSON error text, and run errors; keep `CURSOR_API_KEY` through the sanitized provider environment.
+- Add routing, diagnostics, probe, CLI whitelist, env, and provider unit tests for the Cursor adapter.
 
 ## v0.5.0
 

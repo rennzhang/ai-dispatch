@@ -17,6 +17,7 @@ import (
 	"github.com/rennzhang/ai-dispatch/internal/providers/antigravity"
 	"github.com/rennzhang/ai-dispatch/internal/providers/claude"
 	"github.com/rennzhang/ai-dispatch/internal/providers/codex"
+	"github.com/rennzhang/ai-dispatch/internal/providers/cursor"
 	"github.com/rennzhang/ai-dispatch/internal/providers/grok"
 	"github.com/rennzhang/ai-dispatch/internal/providers/opencode"
 	"github.com/rennzhang/ai-dispatch/internal/routing"
@@ -576,6 +577,8 @@ func providerFor(name string) (providers.Provider, bool) {
 		return antigravity.Provider{}, true
 	case "grok":
 		return grok.Provider{}, true
+	case "cursor":
+		return cursor.Provider{}, true
 	default:
 		return nil, false
 	}
