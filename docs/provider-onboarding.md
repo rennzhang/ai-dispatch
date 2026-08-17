@@ -374,7 +374,7 @@ dispatch 会在这些 failure class 下尝试下一个候选：
 - `disabled`
 - `not_found`
 
-`runtime` 默认不降级。权限拒绝会被短路，不降级。adapter 不要自己实现 fallback。为了避免歧义，adapter 失败时应尽量显式设置 `FailureClass`。
+`runtime` 和无法归类的 provider 失败会继续下一个候选。输入错误、取消、resume 和交互式工具权限拒绝会被短路，不降级；鉴权、额度和 provider 配置错误允许降级。adapter 不要自己实现 fallback。为了避免歧义，adapter 失败时应尽量显式设置 `FailureClass`。
 
 ## AI 接入流程
 

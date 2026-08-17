@@ -107,7 +107,7 @@ ai-dispatch send grok "Reply exactly: OK" \
 > provider 推断
 ```
 
-`config.json models` 命中数组时，按顺序尝试候选。只有 `config`、`quota`、`network`、`timeout` 失败会继续下一个候选；`runtime` 默认不降级。
+`config.json models` 命中数组时，按顺序尝试候选。`config`、`quota`、`network`、`timeout`、`runtime` 和无法归类的 provider 失败都会继续下一个候选；输入错误、取消、resume 和交互式工具权限拒绝不降级。只顺序遍历候选池一轮，不循环重试整个池。
 
 查看真实解析：
 

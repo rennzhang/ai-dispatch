@@ -486,7 +486,12 @@ func shouldTryNextCandidate(req contract.DispatchRequest, result contract.Provid
 		return result.Status == contract.StatusQuota || result.Status == contract.StatusTimeout || result.Status == contract.StatusDisabled || result.Status == contract.StatusNotFound
 	}
 	switch *result.FailureClass {
-	case contract.FailureConfig, contract.FailureQuota, contract.FailureTimeout, contract.FailureNetwork:
+	case contract.FailureConfig,
+		contract.FailureQuota,
+		contract.FailureTimeout,
+		contract.FailureNetwork,
+		contract.FailureRuntime,
+		contract.FailureUnknown:
 		return true
 	default:
 		return false
@@ -496,8 +501,7 @@ func shouldTryNextCandidate(req contract.DispatchRequest, result contract.Provid
 func isPermissionRejection(message string) bool {
 	lower := strings.ToLower(message)
 	return strings.Contains(lower, "permission requested") ||
-		strings.Contains(lower, "auto-rejecting") ||
-		strings.Contains(lower, "permission denied")
+		strings.Contains(lower, "auto-rejecting")
 }
 
 func degradeReason(previous contract.ProviderResult, fallback routing.DispatchTarget) string {

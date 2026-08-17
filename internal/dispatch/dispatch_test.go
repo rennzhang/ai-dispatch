@@ -477,7 +477,7 @@ func TestResumeSessionProviderAcceptsProviderAlias(t *testing.T) {
 	}
 }
 
-func TestRuntimeFailureDoesNotTryNextCandidate(t *testing.T) {
+func TestRuntimeFailureCanTryNextCandidate(t *testing.T) {
 	failure := contract.FailureRuntime
 	result := contract.ProviderResult{
 		OK:           false,
@@ -485,8 +485,21 @@ func TestRuntimeFailureDoesNotTryNextCandidate(t *testing.T) {
 		ProviderUsed: "opencode",
 		FailureClass: &failure,
 	}
-	if shouldTryNextCandidate(contract.DispatchRequest{Command: "send"}, result) {
-		t.Fatalf("runtime failures should not auto degrade")
+	if !shouldTryNextCandidate(contract.DispatchRequest{Command: "send"}, result) {
+		t.Fatalf("runtime failures should try the next configured candidate")
+	}
+}
+
+func TestUnknownFailureCanTryNextCandidate(t *testing.T) {
+	failure := contract.FailureUnknown
+	result := contract.ProviderResult{
+		OK:           false,
+		Status:       contract.StatusError,
+		ProviderUsed: "grok",
+		FailureClass: &failure,
+	}
+	if !shouldTryNextCandidate(contract.DispatchRequest{Command: "send"}, result) {
+		t.Fatalf("unknown provider failures should try the next configured candidate")
 	}
 }
 
@@ -500,6 +513,34 @@ func TestConfigFailureCanTryNextCandidate(t *testing.T) {
 	}
 	if !shouldTryNextCandidate(contract.DispatchRequest{Command: "send"}, result) {
 		t.Fatalf("config failures should try the next configured candidate")
+	}
+}
+
+func TestAuthenticationPermissionDeniedCanTryNextCandidate(t *testing.T) {
+	failure := contract.FailureConfig
+	result := contract.ProviderResult{
+		OK:           false,
+		Status:       contract.StatusError,
+		ProviderUsed: "grok",
+		FailureClass: &failure,
+		Stderr:       "authentication failed: permission denied",
+	}
+	if !shouldTryNextCandidate(contract.DispatchRequest{Command: "send"}, result) {
+		t.Fatalf("authentication failures should try the next configured candidate")
+	}
+}
+
+func TestInteractiveToolPermissionRejectionDoesNotTryNextCandidate(t *testing.T) {
+	failure := contract.FailureConfig
+	result := contract.ProviderResult{
+		OK:           false,
+		Status:       contract.StatusError,
+		ProviderUsed: "opencode",
+		FailureClass: &failure,
+		Stderr:       "permission requested for external_directory; auto-rejecting",
+	}
+	if shouldTryNextCandidate(contract.DispatchRequest{Command: "send"}, result) {
+		t.Fatalf("tool permission rejection must not silently switch providers")
 	}
 }
 
