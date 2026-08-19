@@ -3,6 +3,7 @@ package routing
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -14,6 +15,21 @@ func TestResolveProvider(t *testing.T) {
 	}
 	if target.Provider != "codex" || target.Model != "gpt-5.5" || target.Requested != "codex" {
 		t.Fatalf("target=%+v", target)
+	}
+}
+
+func TestResolveRejectsColonRouteSyntax(t *testing.T) {
+	for _, tc := range []struct {
+		target string
+		model  string
+	}{
+		{target: "cursor:opus5"},
+		{target: "opus5:cursor"},
+		{target: "cursor", model: "opus5:cursor"},
+	} {
+		if _, err := Resolve(tc.target, tc.model); err == nil || !strings.Contains(err.Error(), "colon route syntax is not supported") {
+			t.Fatalf("Resolve(%q, %q) err=%v", tc.target, tc.model, err)
+		}
 	}
 }
 

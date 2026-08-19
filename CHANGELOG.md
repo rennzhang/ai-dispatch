@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.6.2
+
+- Reject legacy-looking `provider:model` and `model:provider` colon inputs instead of inferring them as raw model ids; use `send <provider> --model <model>`.
+
 ## v0.6.1
 
 - Continue ordered `config.models` fallback after config, quota, network, timeout, runtime, and unknown provider failures; cancellation, resume, input, and interactive permission failures still stop immediately.

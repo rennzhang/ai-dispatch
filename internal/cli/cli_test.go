@@ -355,6 +355,24 @@ func TestModelsResolveJSON(t *testing.T) {
 	}
 }
 
+func TestModelsResolveRejectsColonRouteSyntax(t *testing.T) {
+	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	for _, args := range [][]string{
+		{"models", "resolve", "cursor:opus5", "--format", "json"},
+		{"models", "resolve", "opus5:cursor", "--format", "json"},
+		{"models", "resolve", "cursor", "--model", "opus5:cursor", "--format", "json"},
+	} {
+		var stdout, stderr bytes.Buffer
+		code := Main(args, &stdout, &stderr)
+		if code != 2 {
+			t.Fatalf("args=%v code=%d stdout=%s stderr=%s", args, code, stdout.String(), stderr.String())
+		}
+		if !strings.Contains(stdout.String()+stderr.String(), "colon route syntax is not supported") {
+			t.Fatalf("args=%v stdout=%s stderr=%s", args, stdout.String(), stderr.String())
+		}
+	}
+}
+
 func TestModelsResolveFastCapabilityJSON(t *testing.T) {
 	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
 	cases := []struct {

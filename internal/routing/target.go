@@ -37,6 +37,9 @@ func Resolve(rawTarget string, explicitModel string) (DispatchTarget, error) {
 	if target == "" {
 		return DispatchTarget{}, fmt.Errorf("target is required")
 	}
+	if strings.Contains(target, ":") || strings.Contains(model, ":") {
+		return DispatchTarget{}, fmt.Errorf("colon route syntax is not supported; use a provider target with --model")
+	}
 	normalized := strings.ToLower(target)
 	if model == "" {
 		if configured, ok, err := lookupConfiguredModelTarget(target); err != nil {
