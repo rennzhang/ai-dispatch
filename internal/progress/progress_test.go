@@ -39,6 +39,43 @@ func TestEmitterParsesOpenCodeToolUse(t *testing.T) {
 	}
 }
 
+func TestEmitterParsesGrokStreamWithoutExposingThought(t *testing.T) {
+	var output bytes.Buffer
+	emitter := NewEmitter("grok", &output)
+	emitter.Feed([]byte(strings.Join([]string{
+		`{"type":"thought","data":"hidden chain of thought"}`,
+		`{"type":"tool_call","toolName":"read_file","rawInput":{"path":"README.md"}}`,
+		`{"type":"text","data":"done"}`,
+		`{"type":"end","sessionId":"grok-session"}`,
+	}, "\n") + "\n"))
+
+	if strings.Contains(output.String(), "hidden chain of thought") {
+		t.Fatalf("thought leaked into progress: %s", output.String())
+	}
+	lines := parseLines(t, output.String())
+	assertProgressEvent(t, lines, "reasoning", "reasoning", "grok is reasoning")
+	assertProgressEvent(t, lines, "read", "read_file", "README.md")
+	assertProgressEvent(t, lines, "agent_message", "agent_message", "done")
+	assertProgressEvent(t, lines, "session", "session", "grok session grok-session")
+}
+
+func TestEmitterParsesCursorStreamWithoutEchoingUserPrompt(t *testing.T) {
+	var output bytes.Buffer
+	emitter := NewEmitter("cursor", &output)
+	emitter.Feed([]byte(strings.Join([]string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"private prompt"}]},"session_id":"cursor-session"}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"working"}]},"session_id":"cursor-session"}`,
+		`{"type":"tool_call","subtype":"started","tool_call":{"readToolCall":{"args":{"path":"README.md"}}},"session_id":"cursor-session"}`,
+	}, "\n") + "\n"))
+
+	if strings.Contains(output.String(), "private prompt") {
+		t.Fatalf("user prompt leaked into progress: %s", output.String())
+	}
+	lines := parseLines(t, output.String())
+	assertProgressEvent(t, lines, "agent_message", "agent_message", "working")
+	assertProgressEvent(t, lines, "read", "read", "README.md")
+}
+
 func TestEmitterKeepsPartialLines(t *testing.T) {
 	var stderr bytes.Buffer
 	emitter := NewEmitter("claude", &stderr)
@@ -178,4 +215,14 @@ func parseLines(t *testing.T, text string) []map[string]any {
 		lines = append(lines, payload)
 	}
 	return lines
+}
+
+func assertProgressEvent(t *testing.T, lines []map[string]any, kind string, name string, summary string) {
+	t.Helper()
+	for _, line := range lines {
+		if line["kind"] == kind && line["name"] == name && line["summary"] == summary {
+			return
+		}
+	}
+	t.Fatalf("missing progress event kind=%q name=%q summary=%q in %v", kind, name, summary, lines)
 }

@@ -158,8 +158,8 @@ ai-dispatch 当前内置支持六类本机 CLI provider：
 | Claude | `claude -p` 或 PTY | 高风险 review、判断、复杂推理 |
 | OpenCode | `opencode run` | OpenRouter / OpenAI / Google 等模型 |
 | Antigravity/Gemini | `agy --print` | Gemini / Antigravity 视角 |
-| Grok | `grok --output-format json` | Grok Build CLI，快速实现、分析、并行探索 |
-| Cursor | `cursor-agent --print --output-format json` | Cursor 订阅内 Claude/GPT/Gemini/Kimi/Composer 模型 |
+| Grok | `grok --output-format streaming-json` | Grok Build CLI，快速实现、分析、并行探索 |
+| Cursor | `cursor-agent --print --output-format stream-json` | Cursor 订阅内 Claude/GPT/Gemini/Kimi/Composer 模型 |
 
 想接入更多 CLI provider 或参与贡献，见 [issue #1](https://github.com/rennzhang/ai-dispatch/issues/1)。
 

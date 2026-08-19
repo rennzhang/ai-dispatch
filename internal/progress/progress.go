@@ -210,10 +210,18 @@ func eventsFromLine(line string, provider string) []contract.ProgressEvent {
 		return []contract.ProgressEvent{eventFromProgressPayload(payload, provider)}
 	}
 	events := []contract.ProgressEvent{}
+	eventType := firstString(payload, "type")
 	if sessionID := firstString(payload, "session_id", "sessionId", "sessionID"); sessionID != "" {
 		event := contract.NewProgress(contract.ProgressSession, "session", provider+" session "+sessionID)
 		event.Provider = provider
 		event.SessionID = sessionID
+		events = append(events, event)
+	}
+	if eventType == "thought" {
+		// A thought event is genuine provider activity, but hidden reasoning must
+		// not be copied into user-visible progress output.
+		event := contract.NewProgress(contract.ProgressReasoning, "reasoning", provider+" is reasoning")
+		event.Provider = provider
 		events = append(events, event)
 	}
 	if kind, name, summary := toolProgress(payload); name != "" || summary != "" {
@@ -246,11 +254,24 @@ func eventFromProgressPayload(payload map[string]any, provider string) contract.
 }
 
 func toolProgress(payload map[string]any) (contract.ProgressKind, string, string) {
-	name := firstString(payload, "name", "tool")
-	input := valueMap(payload["input"])
+	name := firstString(payload, "name", "tool", "toolName", "title")
+	input := firstNonEmptyMap(valueMap(payload["input"]), valueMap(payload["rawInput"]))
 	if part := valueMap(payload["part"]); len(part) > 0 {
 		name = firstNonEmpty(firstString(part, "tool", "name"), name)
 		input = firstNonEmptyMap(valueMap(part["input"]), input)
+	}
+	if call := valueMap(payload["tool_call"]); len(call) > 0 {
+		for key, rawCall := range call {
+			callPayload := valueMap(rawCall)
+			if len(callPayload) == 0 {
+				continue
+			}
+			if name == "" {
+				name = strings.TrimSuffix(key, "ToolCall")
+			}
+			input = firstNonEmptyMap(callPayload, input)
+			break
+		}
 	}
 	if name == "" {
 		return "", "", ""
@@ -259,6 +280,13 @@ func toolProgress(payload map[string]any) (contract.ProgressKind, string, string
 }
 
 func textProgress(payload map[string]any) string {
+	eventType := firstString(payload, "type")
+	if eventType == "thought" || eventType == "user" {
+		return ""
+	}
+	if eventType == "text" {
+		return trimSummary(firstString(payload, "data", "text"))
+	}
 	if text := firstString(payload, "text", "message", "result"); text != "" {
 		return trimSummary(text)
 	}

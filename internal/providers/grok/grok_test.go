@@ -24,7 +24,7 @@ func TestBuildInlinePrompt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{bin, "--output-format", "json", "--always-approve", "--no-subagents", "--cwd", "/tmp/project", "--model", "grok-4.5", "--single", "hello"}
+	want := []string{bin, "--output-format", "streaming-json", "--always-approve", "--no-subagents", "--cwd", "/tmp/project", "--model", "grok-4.5", "--single", "hello"}
 	if strings.Join(spec.Args, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("args=%#v want=%#v", spec.Args, want)
 	}
@@ -204,9 +204,15 @@ func TestBuildMissingBinaryIsConfigFailureShape(t *testing.T) {
 	}
 }
 
-func TestParseSuccessJSON(t *testing.T) {
+func TestParseSuccessStreamingJSON(t *testing.T) {
 	result := (Provider{}).Parse(runtime.RunResult{
-		Stdout:     []byte(`{"text":"OK","sessionId":"s1","requestId":"r1"}`),
+		Stdout: []byte(strings.Join([]string{
+			`{"type":"thought","data":"private reasoning"}`,
+			`{"type":"text","data":"O"}`,
+			`{"type":"text","data":"K"}`,
+			`{"type":"usage","inputTokens":10,"outputTokens":2}`,
+			`{"type":"end","sessionId":"s1","requestId":"r1","stopReason":"end_turn"}`,
+		}, "\n") + "\n"),
 		Stderr:     []byte("non fatal warning"),
 		ExitCode:   0,
 		DurationMS: 12,
@@ -221,21 +227,21 @@ func TestParseSuccessJSON(t *testing.T) {
 
 func TestParseMalformedJSONIsRuntimeFailure(t *testing.T) {
 	result := (Provider{}).Parse(runtime.RunResult{
-		Stdout:     []byte("plain text despite json flag"),
+		Stdout:     []byte("plain text despite streaming-json flag"),
 		ExitCode:   0,
 		DurationMS: 12,
 	}, providers.BuildRequest{Target: routing.DispatchTarget{Requested: "grok", Provider: "grok", Model: "grok-4.5"}})
 	if result.OK || result.FailureClass == nil || *result.FailureClass != contract.FailureRuntime {
 		t.Fatalf("result=%+v", result)
 	}
-	if !strings.Contains(strings.ToLower(result.Stderr), "malformed json") {
+	if !strings.Contains(strings.ToLower(result.Stderr), "invalid streaming json") {
 		t.Fatalf("stderr=%q", result.Stderr)
 	}
 }
 
 func TestParseJSONMissingTextIsRuntimeFailure(t *testing.T) {
 	result := (Provider{}).Parse(runtime.RunResult{
-		Stdout:     []byte(`{"sessionId":"s1"}`),
+		Stdout:     []byte(`{"type":"end","sessionId":"s1"}`),
 		ExitCode:   0,
 		DurationMS: 12,
 	}, providers.BuildRequest{Target: routing.DispatchTarget{Requested: "grok", Provider: "grok", Model: "grok-4.5"}})
@@ -243,6 +249,22 @@ func TestParseJSONMissingTextIsRuntimeFailure(t *testing.T) {
 		t.Fatalf("result=%+v", result)
 	}
 	if !strings.Contains(result.Stderr, "stdout_events=1") {
+		t.Fatalf("stderr=%q", result.Stderr)
+	}
+}
+
+func TestParseStreamingJSONRequiresTerminalEnd(t *testing.T) {
+	result := (Provider{}).Parse(runtime.RunResult{
+		Stdout:   []byte(`{"type":"text","data":"partial"}` + "\n"),
+		ExitCode: 0,
+	}, providers.BuildRequest{Target: routing.DispatchTarget{Requested: "grok", Provider: "grok", Model: "grok-4.5"}})
+	if result.OK || result.FailureClass == nil || *result.FailureClass != contract.FailureRuntime {
+		t.Fatalf("result=%+v", result)
+	}
+	if result.Text != "" {
+		t.Fatalf("partial stream text must not replace failure diagnostics: %+v", result)
+	}
+	if !strings.Contains(result.Stderr, "without terminal end event") {
 		t.Fatalf("stderr=%q", result.Stderr)
 	}
 }

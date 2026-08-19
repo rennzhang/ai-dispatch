@@ -734,7 +734,7 @@ func TestEffortFallbackDoesNotSetDegradedOrRetry(t *testing.T) {
 				t.Fatalf("fallback must not pass unsupported effort: %#v", spec.Args)
 			}
 			run := execruntime.RunResult{
-				Stdout:     []byte(`{"text":"OK","sessionId":"s1"}`),
+				Stdout:     []byte("{\"type\":\"text\",\"data\":\"OK\"}\n{\"type\":\"end\",\"sessionId\":\"s1\"}\n"),
 				ExitCode:   0,
 				DurationMS: 5,
 			}
@@ -816,7 +816,7 @@ func TestFastFallbackDoesNotSetDegradedOrRetry(t *testing.T) {
 			if strings.Contains(strings.Join(spec.Args, "\x00"), "--fast") {
 				t.Fatalf("fallback must not pass unsupported fast flag: %#v", spec.Args)
 			}
-			run := execruntime.RunResult{Stdout: []byte(`{"text":"OK","sessionId":"s1"}`), ExitCode: 0, DurationMS: 5}
+			run := execruntime.RunResult{Stdout: []byte("{\"type\":\"text\",\"data\":\"OK\"}\n{\"type\":\"end\",\"sessionId\":\"s1\"}\n"), ExitCode: 0, DurationMS: 5}
 			parsed := p.Parse(run, providers.BuildRequest{Target: target, Fast: resolution.Applied})
 			ensureRouteMetadata(&parsed, target, run.DurationMS)
 			applyFastResolution(&parsed, resolution)
@@ -952,7 +952,7 @@ func TestEffortRequestedSurvivesCandidateFallback(t *testing.T) {
 				applyEffortResolution(&result, resolution)
 				return result
 			}
-			run := execruntime.RunResult{Stdout: []byte(`{"text":"OK","sessionId":"s2"}`), ExitCode: 0, DurationMS: 3}
+			run := execruntime.RunResult{Stdout: []byte("{\"type\":\"text\",\"data\":\"OK\"}\n{\"type\":\"end\",\"sessionId\":\"s2\"}\n"), ExitCode: 0, DurationMS: 3}
 			result := p.Parse(run, providers.BuildRequest{Target: buildTarget, Effort: resolution.Applied})
 			ensureRouteMetadata(&result, buildTarget, run.DurationMS)
 			applyEffortResolution(&result, resolution)
@@ -981,7 +981,7 @@ func TestEffortRequestedSurvivesCandidateFallback(t *testing.T) {
 func writeFakeGrokOK(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "grok")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\necho '{\"text\":\"OK\",\"sessionId\":\"s1\"}'\n"), 0o755); err != nil {
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf '%s\\n' '{\"type\":\"text\",\"data\":\"OK\"}' '{\"type\":\"end\",\"sessionId\":\"s1\"}'\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return path

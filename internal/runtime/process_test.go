@@ -71,6 +71,18 @@ func TestRunProcessActivityTimeout(t *testing.T) {
 	}
 }
 
+func TestRunProcessProviderActivityResetsTimeout(t *testing.T) {
+	result := RunProcess(context.Background(), CommandSpec{
+		Args: []string{"sh", "-c", "for i in 1 2 3 4 5; do printf 'tick\\n'; sleep 0.3; done"},
+	}, RunOptions{ActivityTimeout: time.Second}, StreamHooks{})
+	if result.TimedOut || result.ExitCode != 0 {
+		t.Fatalf("periodic provider output must keep the process alive: %+v", result)
+	}
+	if result.DurationMS < 1000 || strings.Count(string(result.Stdout), "tick") != 5 {
+		t.Fatalf("activity fixture did not outlive one timeout window: duration=%d stdout=%q", result.DurationMS, result.Stdout)
+	}
+}
+
 func TestRunProcessHookReceivesOutput(t *testing.T) {
 	var chunks []string
 	result := RunProcess(context.Background(), CommandSpec{

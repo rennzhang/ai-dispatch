@@ -40,7 +40,7 @@ func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 	if err != nil {
 		return runtime.CommandSpec{}, err
 	}
-	args := []string{bin, "--print", "--output-format", "json", "--trust"}
+	args := []string{bin, "--print", "--output-format", "stream-json", "--trust"}
 	if approval := strings.TrimSpace(req.ProviderOptions["approval"]); approval != "" {
 		switch approval {
 		case "always":

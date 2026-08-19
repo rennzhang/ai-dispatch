@@ -34,6 +34,14 @@ scripts/ai-dispatch config show
 scripts/ai-dispatch models resolve <target> --format json
 ```
 
+## 模型名解析
+
+用户说的模型名可能不严谨，按下面规则翻译成 CLI 参数：
+
+- 只说模型名 → 作为 target，例如 `send opus5`
+- 说「provider + 模型名」→ provider 作 target、模型名作 `--model`，例如 `cursor opus5` → `send cursor --model opus5`
+- 不确定时先用同一组参数执行 `models resolve`，例如 `models resolve cursor --model opus5 --format json`
+
 ## 派发
 
 把用户的自然语言意图整理成 prompt，再派给目标 provider：

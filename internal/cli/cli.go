@@ -535,7 +535,7 @@ func defaultFixedTimeoutSeconds(flagValue int) int {
 	if flagValue >= 0 {
 		return flagValue
 	}
-	return 1800
+	return 7200
 }
 
 func reorderInterspersedFlags(argv []string) ([]string, error) {

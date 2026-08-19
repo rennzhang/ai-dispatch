@@ -24,7 +24,7 @@ func TestBuildInlinePrompt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{bin, "--print", "--output-format", "json", "--trust", "--model", "claude-fable-5-thinking-high", "--workspace", "/tmp/project"}
+	want := []string{bin, "--print", "--output-format", "stream-json", "--trust", "--model", "claude-fable-5-thinking-high", "--workspace", "/tmp/project"}
 	if strings.Join(spec.Args, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("args=%#v want=%#v", spec.Args, want)
 	}
@@ -164,7 +164,12 @@ func TestResolveCursorFast(t *testing.T) {
 func TestParseSuccess(t *testing.T) {
 	p := Provider{}
 	result := p.Parse(runtime.RunResult{
-		Stdout:     []byte(`{"type":"result","subtype":"success","is_error":false,"duration_ms":12042,"result":"OK","session_id":"abc-123","usage":{"inputTokens":10,"outputTokens":2,"cacheReadTokens":5,"cacheWriteTokens":0}}` + "\n"),
+		Stdout: []byte(strings.Join([]string{
+			`{"type":"system","subtype":"init","session_id":"abc-123","model":"claude-fable-5-thinking-high"}`,
+			`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"O"}]},"session_id":"abc-123"}`,
+			`{"type":"tool_call","subtype":"started","tool_call":{"readToolCall":{"args":{"path":"README.md"}}},"session_id":"abc-123"}`,
+			`{"type":"result","subtype":"success","is_error":false,"duration_ms":12042,"result":"OK","session_id":"abc-123","usage":{"inputTokens":10,"outputTokens":2,"cacheReadTokens":5,"cacheWriteTokens":0}}`,
+		}, "\n") + "\n"),
 		ExitCode:   0,
 		DurationMS: 12042,
 	}, providers.BuildRequest{

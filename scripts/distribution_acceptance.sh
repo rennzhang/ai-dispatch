@@ -273,7 +273,9 @@ if [[ -n "${GROK_FAKE_ARGS_FILE:-}" ]]; then
   printf '%s\n' "$@" >"$GROK_FAKE_ARGS_FILE"
 fi
 if [[ "${GROK_FAKE_MODE:-success}" == "success" ]]; then
-  printf '%s\n' '{"text":"distribution acceptance output","sessionId":"distribution-session"}'
+  printf '%s\n' \
+    '{"type":"text","data":"distribution acceptance output"}' \
+    '{"type":"end","sessionId":"distribution-session"}'
   exit 0
 fi
 printf '%s\n' "$$" >"${GROK_FAKE_PID_FILE:?}"

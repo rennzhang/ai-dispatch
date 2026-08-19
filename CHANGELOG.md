@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.6.1
+
+- Continue ordered `config.models` fallback after config, quota, network, timeout, runtime, and unknown provider failures; cancellation, resume, input, and interactive permission failures still stop immediately.
+- Raise the default wall-clock safety limit from 1800 seconds to 7200 seconds (120 minutes) for every provider; `--timeout 0` still disables it.
+- Switch Grok and Cursor from completion-only JSON to incremental NDJSON so shared provider-activity timeouts reset while either CLI is still producing events.
+- Parse Grok text/end events into the final result and expose safe Grok/Cursor progress without echoing user prompts or hidden reasoning.
+
 ## v0.6.0
 
 - Add native Cursor provider (`cursor-agent --print --output-format json`) with subscription model routing: `cursor-fable5`, `cursor-opus5`, `cursor-sonnet5`, `cursor-composer`, plus Fable/Opus/Sonnet aliases and `cursor` bare target defaulting to Composer.

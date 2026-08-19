@@ -66,7 +66,7 @@ ai-dispatch config show
 
 ## 执行边界
 
-默认关闭“无输出超时”；只要 provider 没有明确失败或完成，dispatch 就继续等待。默认仍保留 1800 秒总兜底，可用 `--timeout` 调整；只有显式传 `--activity-timeout` 才启用无活动超时。
+默认关闭“无输出超时”；只要 provider 没有明确失败或完成，dispatch 就继续等待。默认仍保留 7200 秒（120 分钟）总兜底，可用 `--timeout` 调整；传 `--timeout 0` 可关闭墙钟上限。只有显式传 `--activity-timeout` 才启用无活动超时。启用后，provider 的任意 stdout/stderr 增量事件都会重置计时，只有连续静默达到阈值才会终止；各 adapter 必须优先使用底层 CLI 的流式输出模式。
 
 收到 `SIGINT`、`SIGTERM` 或 `SIGHUP` 时，dispatch 会终止当前 provider 进程树、停止候选降级，并统一返回 canceled 结果（`exit_code=130`、`next_action=done`）。这里的 130 是 ai-dispatch 的“调用已取消”契约，不用于区分信号来源。
 

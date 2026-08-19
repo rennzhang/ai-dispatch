@@ -250,7 +250,7 @@ ai-dispatch send grok "Reply exactly: OK" \
 
 ## Cursor provider opts
 
-Cursor 走本机 `cursor-agent --print --output-format json`，模型 ID 自带推理档位后缀（如 `claude-fable-5-thinking-high`、`claude-opus-5-thinking-high`），不接收 `--effort` 精确档位；需要其它档位时换用带对应后缀的短名。
+Cursor 走本机 `cursor-agent --print --output-format stream-json`，模型 ID 自带推理档位后缀（如 `claude-fable-5-thinking-high`、`claude-opus-5-thinking-high`），不接收 `--effort` 精确档位；需要其它档位时换用带对应后缀的短名。
 
 推荐配置：
 

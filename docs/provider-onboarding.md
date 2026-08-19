@@ -12,8 +12,8 @@ ai-dispatch 不关心某个外部 CLI 自己怎么设计。接入者需要自己
 - `claude`：`claude -p` 或 PTY driver
 - `opencode`：`opencode run`
 - `antigravity`：`agy --print`，通过内置 `__agy-driver` 包装
-- `grok`：`grok --output-format json`
-- `cursor`：`cursor-agent --print --output-format json`
+- `grok`：`grok --output-format streaming-json`
+- `cursor`：`cursor-agent --print --output-format stream-json`
 
 新 CLI，例如 Copilot CLI、Augment CLI、Kimi CLI，应该新增 provider adapter。不要把新 CLI 伪装成 `codex`、`opencode` 或其他已有 provider。
 

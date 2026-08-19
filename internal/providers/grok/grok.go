@@ -44,7 +44,7 @@ func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 	}
 	args := []string{
 		bin,
-		"--output-format", "json",
+		"--output-format", "streaming-json",
 	}
 	if err := appendGrokOptions(&args, req.ProviderOptions); err != nil {
 		return runtime.CommandSpec{}, err
@@ -173,7 +173,7 @@ func grokEnv() []string {
 func (Provider) Parse(run runtime.RunResult, req providers.BuildRequest) contract.ProviderResult {
 	stdout := string(run.Stdout)
 	stderr := string(run.Stderr)
-	text, sessionID, parseErr := parseGrokJSON(stdout)
+	text, sessionID, parseErr := parseGrokStreamingJSON(stdout)
 	status := contract.StatusSuccess
 	var failure *contract.FailureClass
 	next := contract.NextDone
@@ -197,7 +197,7 @@ func (Provider) Parse(run runtime.RunResult, req providers.BuildRequest) contrac
 		classifiedStdout := stdout
 		classifiedStderr := redactGrokDiagnostics(stderr)
 		if run.ExitCode == 0 && parseErr != nil {
-			classifiedStdout = "malformed json: " + parseErr.Error()
+			classifiedStdout = "invalid streaming json: " + parseErr.Error()
 		}
 		classified := diagnostics.Classify("Grok", classifiedStdout, classifiedStderr, run.Error)
 		status = classified.Status
@@ -206,10 +206,15 @@ func (Provider) Parse(run runtime.RunResult, req providers.BuildRequest) contrac
 		next = contract.NextActionForFailure(f, "grok")
 		resultStderr = classified.Stderr
 		if run.ExitCode == 0 && parseErr != nil {
-			resultStderr = "Grok returned malformed JSON despite --output-format json: " + parseErr.Error()
+			resultStderr = "Grok returned invalid streaming JSON despite --output-format streaming-json: " + parseErr.Error()
 		} else if resultStderr == "Grok returned no successful result" {
 			resultStderr = diagnostics.NoResultMessage("Grok", stdout, redactGrokDiagnostics(stderr), run.ExitCode)
 		}
+	}
+	if !ok {
+		// Streaming output may contain an incomplete answer before a real failure
+		// or inactivity timeout. Keep failure diagnostics authoritative.
+		text = ""
 	}
 	return contract.ProviderResult{
 		SchemaVersion:   "2.0",
@@ -236,21 +241,70 @@ func (Provider) Parse(run runtime.RunResult, req providers.BuildRequest) contrac
 	}
 }
 
-func parseGrokJSON(stdout string) (string, string, error) {
-	var event map[string]any
+func parseGrokStreamingJSON(stdout string) (string, string, error) {
 	trimmed := strings.TrimSpace(stdout)
 	if trimmed == "" {
 		return "", "", errors.New("empty stdout")
 	}
-	if err := json.Unmarshal([]byte(trimmed), &event); err != nil {
-		return "", "", err
+
+	var text strings.Builder
+	var sessionID string
+	sawStreamingEvent := false
+	sawEnd := false
+	for index, rawLine := range strings.Split(trimmed, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			continue
+		}
+		var event struct {
+			Type       string `json:"type"`
+			Data       string `json:"data"`
+			Message    string `json:"message"`
+			SessionID  string `json:"sessionId"`
+			SessionKey string `json:"session_id"`
+		}
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			return "", "", fmt.Errorf("line %d: %w", index+1, err)
+		}
+
+		eventSessionID := firstNonEmptyString(event.SessionID, event.SessionKey)
+		if event.Type == "" {
+			return "", "", fmt.Errorf("line %d: missing streaming event type", index+1)
+		}
+		sawStreamingEvent = true
+		if eventSessionID != "" {
+			sessionID = eventSessionID
+		}
+		switch event.Type {
+		case "text":
+			text.WriteString(event.Data)
+		case "end":
+			sawEnd = true
+		case "error":
+			message := firstNonEmptyString(event.Message, event.Data)
+			if message == "" {
+				message = "provider emitted an error event"
+			}
+			return text.String(), sessionID, errors.New(message)
+		}
 	}
-	text, _ := event["text"].(string)
-	sessionID, _ := event["sessionId"].(string)
-	if sessionID == "" {
-		sessionID, _ = event["session_id"].(string)
+
+	if !sawStreamingEvent {
+		return "", "", errors.New("no JSON events")
 	}
-	return text, sessionID, nil
+	if !sawEnd {
+		return text.String(), sessionID, errors.New("stream ended without terminal end event")
+	}
+	return text.String(), sessionID, nil
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func grokWarnings(stderr string) []string {

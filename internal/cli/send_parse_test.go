@@ -111,7 +111,7 @@ func TestDefaultFixedTimeoutIsSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if req.TimeoutSeconds != 1800 {
+	if req.TimeoutSeconds != 7200 {
 		t.Fatalf("timeout=%d", req.TimeoutSeconds)
 	}
 	req, _, err = parseSend("send", []string{"--timeout", "0", "gpt5.5", "hello"}, &stderr)
