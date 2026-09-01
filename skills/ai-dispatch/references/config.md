@@ -102,9 +102,9 @@ ai-dispatch send grok "Reply exactly: OK" \
 
 ```text
 显式 provider + --model
-> config.json models
-> 内置 registry
-> provider 推断
+> config.json models 短名
+> config 候选里的精确 model id
+> 裸 provider 名
 ```
 
 `config.json models` 命中数组时，按顺序尝试候选。`config`、`quota`、`network`、`timeout`、`runtime` 和无法归类的 provider 失败都会继续下一个候选；输入错误、取消、resume 和交互式工具权限拒绝不降级。只顺序遍历候选池一轮，不循环重试整个池。

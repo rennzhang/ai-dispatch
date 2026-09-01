@@ -51,7 +51,7 @@ func TestPromptFileCanExceedInlinePromptLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	code := Main([]string{"send", "gpt5.5", "--prompt-file", path, "--json-result"}, &stdout, &stderr)
+	code := Main([]string{"send", "codex", "--prompt-file", path, "--json-result"}, &stdout, &stderr)
 	if code != 3 {
 		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -67,7 +67,7 @@ func TestPromptFileCanExceedInlinePromptLimit(t *testing.T) {
 func TestStdinPromptIsAccepted(t *testing.T) {
 	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
 	var stdout, stderr bytes.Buffer
-	code := MainWithInput([]string{"send", "gpt5.5", "--json-result"}, &stdout, &stderr, strings.NewReader("hello from stdin"))
+	code := MainWithInput([]string{"send", "codex", "--json-result"}, &stdout, &stderr, strings.NewReader("hello from stdin"))
 	if code != 3 {
 		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -292,7 +292,7 @@ func TestRejectsAmbiguousDashPrompt(t *testing.T) {
 func TestExplicitPromptIgnoresInheritedStdin(t *testing.T) {
 	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
 	var stdout, stderr bytes.Buffer
-	code := MainWithInput([]string{"send", "gpt5.5", "hello", "--json-result"}, &stdout, &stderr, strings.NewReader("stdin"))
+	code := MainWithInput([]string{"send", "codex", "hello", "--json-result"}, &stdout, &stderr, strings.NewReader("stdin"))
 	if code != 3 {
 		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}

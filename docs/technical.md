@@ -192,11 +192,11 @@ ai-dispatch models resolve opus --format json
 ```text
 显式 provider + --model
 > ~/.ai-dispatch/config.json 的 models
-> 内置 registry
-> provider 推断
+> config 候选里的精确 model id
+> 裸 provider 名
 ```
 
-`config.json models` 会覆盖同名内置短名；这是用户主动维护本机候选池的入口。需要强制 provider 语义时，使用 provider 名加显式 `--model`。
+config.json models 是唯一可执行短名路由。config 里没有的短名直接失败。需要强制 provider 语义时，使用 provider 名加显式 --model。
 
 `preferences.md` 只决定“某场景倾向选哪个短名”。`config.json models` 才是用户已经确认并主动加入的本机模型候选池。
 
@@ -217,7 +217,6 @@ Grok 的推荐入口是 `config.json models` 里的 `grok` 候选链：第一候
 
 ```bash
 ai-dispatch send grok "Reply exactly: OK" --json-result
-ai-dispatch send grok-fast "Reply exactly: OK" --json-result
 ```
 
 推荐配置：
@@ -246,7 +245,7 @@ ai-dispatch send grok "Reply exactly: OK" \
 
 默认 `grok.approval=always` 会向 Grok CLI 传 `--always-approve`，用于非交互式 dispatch。处理不可信 prompt 或不希望自动批准工具/文件操作时，传 `--provider-opt grok.approval=default`。
 
-旧的 `grok-build-0.1` 不再作为直接 target。需要原生 Grok Build CLI 时用 `grok` 或 `grok-fast`；需要直接走 OpenRouter 时，用 `opencode --model openrouter/x-ai/grok-4.5`。
+旧的 `grok-build-0.1` 不再作为直接 target。需要原生 Grok Build CLI 时用 grok。
 
 ## Cursor provider opts
 

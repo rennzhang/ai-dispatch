@@ -135,7 +135,7 @@ expect_disabled "workflow-codex" \
 
 expect_disabled "dispatch-skill-task-name" \
   send \
-  gpt5.5 \
+  codex \
   "hello" \
   --task-name review-r1 \
   --cwd "$ROOT" \
@@ -145,14 +145,14 @@ expect_disabled "dispatch-skill-task-name" \
 expect_disabled "resume-session" \
   resume --session-id sid-bridge \
   "continue" \
-  --target gpt5.5 \
+  --target codex \
   --task-name review-r2 \
   --json-result
 
 expect_success "runs-list-filter" \
   runs list \
   --task-name 'review-*' \
-  --target gpt5.5 \
+  --target codex \
   --status disabled \
   --limit 5
 

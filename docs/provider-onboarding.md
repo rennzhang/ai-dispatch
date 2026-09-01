@@ -100,14 +100,10 @@ type DispatchTarget struct {
 
 - `internal/routing/target.go`
   - `Resolve(...)`：如果 provider 有裸 target，例如 `copilot`，在这里解析。裸 target 指只写 provider 名就能运行的入口，类似 `codex`、`claude`、`opencode`。
-  - `implementedProvider(...)`：加入 provider 名。漏掉时，registry 条目会被跳过；`config.json models` 引用这个 provider 会直接报错。
+  - `implementedProvider(...)`：加入 provider 名。漏掉时，`config.json models` 引用这个 provider 会直接报错。
   - `SupportedTargets()`：如果 provider 支持裸 target，加入列表，让 `models` 和补全能发现它。
-- `internal/routing/models.json`
-  - 如果要开箱支持某些模型短名，加入 registry 条目。
-  - `dispatchRunner` 必须是已实现的 provider runtime 名，或 `normalizeProvider(...)` 已知的别名。当前只有 `gemini` 会归一到 `antigravity`。
-  - `dispatchModel` 是传给底层 CLI 的真实模型参数。
 
-只是在已有 provider 下新增模型时，不要新增 provider。用户本机的私有短名优先放 `~/.ai-dispatch/config.json` 的 `models` 字段；源码内置默认才改 `internal/routing/models.json`。
+只是在已有 provider 下新增模型时，不要新增 provider。用户短名只放 ~/.ai-dispatch/config.json 的 models 字段，不要再往源码里加内置短名表。
 
 ## Provider Adapter
 
@@ -131,7 +127,7 @@ type Provider interface {
 }
 ```
 
-`Name()` 返回稳定小写 provider 名，例如 `copilot`。这个名字要和 routing、`providerFor()`、`providerOpts`、probe、registry 里的名字一致。
+`Name()` 返回稳定小写 provider 名，例如 `copilot`。这个名字要和 routing、`providerFor()`、`providerOpts`、probe 里的名字一致。
 
 ### ResolveEffort
 
@@ -291,12 +287,10 @@ provider 私有参数统一走：
    - 更新 `providers scan` 文本输出里的 provider 展示顺序；`--format json` 会输出 map，但默认 text 输出有硬编码顺序。
 7. `internal/diagnostics/classify.go`
    - 如果新 provider 有独有错误模式，补 provider-specific 分类。
-8. `internal/routing/models.json`
-   - 如果需要开箱短名，新增 registry 条目。
 9. docs
    - 需要用户知道的新 provider target，更新 README 或技术文档中支持范围。
 
-如果只是已有 provider 下的新模型，通常只改 `models.json`，或者让用户写 `config.json models`，不走新增 provider。
+如果只是已有 provider 下的新模型，让用户写 config.json models，不走新增 provider。
 
 ## Provider Scan
 
@@ -418,7 +412,7 @@ dispatch 会在这些 failure class 下尝试下一个候选：
 
 - `internal/routing/target_test.go`
   - provider 裸 target 可解析。
-  - registry alias 可解析。
+  - config 短名和精确 model id 可解析。
   - `models resolve <target>` 返回正确 provider/model。
 - `internal/setup/probe_test.go`
   - binary override、fallback、错误脱敏。

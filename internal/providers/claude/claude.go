@@ -496,18 +496,7 @@ func isClaudeErrorText(text string) bool {
 }
 
 func shouldPassClaudeModel(req providers.BuildRequest) bool {
-	if strings.TrimSpace(req.Target.Model) == "" {
-		return false
-	}
-	if hasClaudeAPIBackend(processClaudeEnv()) {
-		switch req.Target.Source {
-		case "registry", "alias", "inferred":
-			if strings.TrimSpace(req.Target.ActualID) != "" && strings.TrimSpace(req.Target.ActualID) != strings.TrimSpace(req.Target.Model) {
-				return false
-			}
-		}
-	}
-	return true
+	return strings.TrimSpace(req.Target.Model) != ""
 }
 
 func effectiveTransport(req providers.BuildRequest) string {

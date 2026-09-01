@@ -129,9 +129,9 @@ done < <(jq -r '.targets[]' "$TARGETS_FILE")
 
 run_case "resolve_provider_explicit_model_codex_gpt54" bin/ai-dispatch models resolve codex --model gpt5.4 --format json
 run_case "resolve_gemini" bin/ai-dispatch models resolve gemini --format json
-run_case "cli_input_missing_EXPECT_ERROR" bin/ai-dispatch send gpt5.5 --json-result
-run_case "cli_prompt_too_short_EXPECT_ERROR" bin/ai-dispatch send gpt5.5 x --json-result
-run_case "cli_bad_cwd_EXPECT_ERROR" bin/ai-dispatch send gpt5.5 "hello" --cwd "$REPORT_DIR/missing" --json-result
+run_case "cli_input_missing_EXPECT_ERROR" bin/ai-dispatch send codex --json-result
+run_case "cli_prompt_too_short_EXPECT_ERROR" bin/ai-dispatch send codex x --json-result
+run_case "cli_bad_cwd_EXPECT_ERROR" bin/ai-dispatch send codex "hello" --cwd "$REPORT_DIR/missing" --json-result
 
 while IFS= read -r key; do
   provider="$(bin/ai-dispatch models resolve "$key" --format json | jq -r '.Provider // .provider')"
@@ -150,44 +150,44 @@ done < <(jq -r '.targets[]' "$TARGETS_FILE")
 PROMPT_FILE="$REPORT_DIR/prompt.md"
 printf 'Reply exactly: PROMPT_FILE_OK\n' >"$PROMPT_FILE"
 run_case "prompt_file_output_file_EXPECT_PROMPT_FILE_OK" \
-  bin/ai-dispatch send gpt5.5 --prompt-file "$PROMPT_FILE" --json-result \
+  bin/ai-dispatch send codex --prompt-file "$PROMPT_FILE" --json-result \
     --output-file "$REPORT_DIR/out.md" --timeout 180 --activity-timeout 90
 
 run_case_stdin "stdin_prompt_short_o_EXPECT_STDIN_OK" "Reply exactly: STDIN_OK" \
-  bin/ai-dispatch send gpt5.5 --json-result -o "$REPORT_DIR/stdin.md" --timeout 180 --activity-timeout 90
+  bin/ai-dispatch send codex --json-result -o "$REPORT_DIR/stdin.md" --timeout 180 --activity-timeout 90
 
 WORKDIR="$REPORT_DIR/workdir"
 mkdir -p "$WORKDIR"
 printf 'needle-from-cwd\n' >"$WORKDIR/needle.txt"
 run_case "cwd_codex_file_read_EXPECT_CWD_OK" \
-  bin/ai-dispatch send gpt5.5 "Read needle.txt in cwd and reply exactly: CWD_OK" \
+  bin/ai-dispatch send codex "Read needle.txt in cwd and reply exactly: CWD_OK" \
     --cwd "$WORKDIR" --json-result --timeout 180 --activity-timeout 90
 
 run_case "opencode_explicit_model_m_flag_EXPECT_OPENCODE_M_OK" \
   bin/ai-dispatch send opencode "Reply exactly: OPENCODE_M_OK" \
-    -m openrouter/moonshotai/kimi-k2.7-code --json-result --timeout 180 --activity-timeout 90
+    -m opencode/mimo-v2.5-free --json-result --timeout 180 --activity-timeout 90
 
 run_case "claude_explicit_model_flag_EXPECT_CLAUDE_MODEL_OK" \
   bin/ai-dispatch send claude "Reply exactly: CLAUDE_MODEL_OK" \
     --model sonnet --json-result --timeout 120 --activity-timeout 60
 
 run_case "task_name_metadata_EXPECT_CALLER_OK" \
-  bin/ai-dispatch send gpt5.5 "Reply exactly: CALLER_OK" \
+  bin/ai-dispatch send codex "Reply exactly: CALLER_OK" \
     --json-result --timeout 180 --activity-timeout 90 --task-name "stress-metadata"
 
 run_case "timeout_short_EXPECT_TIMEOUT" \
-  bin/ai-dispatch send gpt5.5 "Sleep for 10 seconds then reply exactly: SHOULD_NOT_FINISH" \
+  bin/ai-dispatch send codex "Sleep for 10 seconds then reply exactly: SHOULD_NOT_FINISH" \
     --json-result --timeout 1 --activity-timeout 90
 
 run_case "activity_timeout_short_EXPECT_TIMEOUT" \
-  bin/ai-dispatch send gpt5.5 "Wait silently for 10 seconds then reply exactly: SHOULD_NOT_FINISH" \
+  bin/ai-dispatch send codex "Wait silently for 10 seconds then reply exactly: SHOULD_NOT_FINISH" \
     --json-result --timeout 0 --activity-timeout 1
 
 SESSION="$(
   node -e '
 const fs = require("fs");
 const rows = fs.readFileSync(process.argv[1], "utf8").trim().split(/\n/).filter(Boolean).map(JSON.parse);
-const row = rows.find((item) => item.name.startsWith("provider_opencode_mimo-openrouter-pro") && item.session_id);
+const row = rows.find((item) => item.name.startsWith("provider_opencode_") && item.session_id);
 process.stdout.write(row ? row.session_id : "");
 ' "$REPORT_DIR/summary.jsonl"
 )"
@@ -201,13 +201,13 @@ fi
 
 run_case "resume_missing_EXPECT_ERROR" \
   bin/ai-dispatch resume --session-id missing-session-id "Reply exactly: RESUME_MISSING" \
-    --target gpt5.5 --json-result --timeout 1
+    --target codex --json-result --timeout 1
 
 run_case "canonical_send_EXPECT_OK" \
-  bin/ai-dispatch send gpt5.5 "Reply exactly: CANONICAL_OK" --json-result --timeout 180 --activity-timeout 90
+  bin/ai-dispatch send codex "Reply exactly: CANONICAL_OK" --json-result --timeout 180 --activity-timeout 90
 
 run_case "runs_list" bin/ai-dispatch runs list --status success --limit 5
-run_case "runs_list_filters" bin/ai-dispatch runs list --target gpt5.5 --task-name "stress-*" --limit 10
+run_case "runs_list_filters" bin/ai-dispatch runs list --target codex --task-name "stress-*" --limit 10
 
 if [[ "${AI_DISPATCH_SKIP_AGY:-off}" == "on" ]]; then
   printf '[stress] SKIP antigravity provider cases because AI_DISPATCH_SKIP_AGY=on\n'

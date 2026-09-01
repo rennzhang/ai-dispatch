@@ -7,13 +7,95 @@ import (
 	"testing"
 )
 
+const fableConfig = `{
+  "version": 1,
+  "claude_transport": "print",
+  "models": {
+    "fable": [
+      { "provider": "claude", "model": "claude-fable-5" },
+      { "provider": "cursor", "model": "claude-fable-5-thinking-high" }
+    ],
+    "kimi-k3": [
+      { "provider": "cursor", "model": "kimi-k3" }
+    ]
+  },
+  "providers": {}
+}`
+
+const grokConfig = `{
+  "version": 1,
+  "claude_transport": "print",
+  "models": {
+    "grok": [
+      { "provider": "grok", "model": "grok-4.5" },
+      { "provider": "opencode", "model": "openrouter/x-ai/grok-4.5" }
+    ]
+  },
+  "providers": {}
+}`
+
+const grokExplicitConfig = `{
+  "version": 1,
+  "claude_transport": "print",
+  "models": {
+    "grok": [
+      { "provider": "opencode", "model": "openrouter/x-ai/grok-4.5" }
+    ]
+  },
+  "providers": {}
+}`
+
+const gptConfig = `{
+  "version": 1,
+  "claude_transport": "print",
+  "models": {
+    "gpt5.5": [
+      { "provider": "opencode", "model": "openai/gpt-5.5" }
+    ]
+  },
+  "providers": {}
+}`
+
+const codexOverrideConfig = `{
+  "version": 1,
+  "claude_transport": "print",
+  "models": {
+    "codex": [
+      { "provider": "opencode", "model": "openai/gpt-5.5" }
+    ]
+  },
+  "providers": {}
+}`
+
+const mimoConfig = `{
+  "version": 1,
+  "claude_transport": "print",
+  "models": {
+    "mimo-pro": [
+      { "provider": "opencode", "model": "openrouter/xiaomi/mimo-v2.5-pro" },
+      { "provider": "opencode", "model": "opencode/mimo-v2.5-free" }
+    ]
+  },
+  "providers": {}
+}`
+
+const ambiguousConfig = `{
+  "version": 1,
+  "claude_transport": "print",
+  "models": {
+    "one": [{ "provider": "claude", "model": "shared-id" }],
+    "two": [{ "provider": "cursor", "model": "shared-id" }]
+  },
+  "providers": {}
+}`
+
 func TestResolveProvider(t *testing.T) {
 	isolateConfig(t)
 	target, err := Resolve("codex", "gpt-5.5")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.Provider != "codex" || target.Model != "gpt-5.5" || target.Requested != "codex" {
+	if target.Provider != "codex" || target.Model != "gpt-5.5" || target.Requested != "codex" || target.Source != "provider" {
 		t.Fatalf("target=%+v", target)
 	}
 }
@@ -33,195 +115,148 @@ func TestResolveRejectsColonRouteSyntax(t *testing.T) {
 	}
 }
 
-func TestResolveCodexDefaultsToGPT55(t *testing.T) {
+func TestResolveBareProviderUsesCLIDefault(t *testing.T) {
 	isolateConfig(t)
-	target, err := Resolve("codex", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if target.Provider != "codex" || target.Model != "gpt-5.5" || target.Requested != "codex" {
-		t.Fatalf("target=%+v", target)
-	}
-}
-
-func TestResolveBuiltinAlias(t *testing.T) {
-	isolateConfig(t)
-	target, err := Resolve("gpt5.5", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if target.Provider != "codex" || target.Model != "gpt-5.5" || target.Source != "registry" {
-		t.Fatalf("target=%+v", target)
-	}
-}
-
-func TestResolveGPT56SolAndTerraRegistryTargets(t *testing.T) {
-	isolateConfig(t)
-	cases := []struct {
-		target string
-		model  string
+	for _, tc := range []struct {
+		target   string
+		provider string
 	}{
-		{target: "gpt5.6", model: "gpt-5.6-sol"},
-		{target: "gpt5.6-terra", model: "gpt-5.6-terra"},
-		{target: "gpt5.6-luna", model: "gpt-5.6-luna"},
-		{target: "luna", model: "gpt-5.6-luna"},
-	}
-	for _, tc := range cases {
+		{target: "codex", provider: "codex"},
+		{target: "claude", provider: "claude"},
+		{target: "cursor", provider: "cursor"},
+		{target: "grok", provider: "grok"},
+		{target: "opencode", provider: "opencode"},
+		{target: "antigravity", provider: "antigravity"},
+		{target: "gemini", provider: "antigravity"},
+	} {
 		got, err := Resolve(tc.target, "")
 		if err != nil {
 			t.Fatalf("Resolve(%q): %v", tc.target, err)
 		}
-		if got.Provider != "codex" || got.Model != tc.model || got.Source != "registry" {
-			t.Fatalf("Resolve(%q)=%+v want provider=codex model=%s source=registry", tc.target, got, tc.model)
-		}
-	}
-	alias, err := Resolve("gpt-5.6", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if alias.Provider != "codex" || alias.Model != "gpt-5.6-sol" || alias.Source != "registry" {
-		t.Fatalf("gpt-5.6 alias=%+v", alias)
-	}
-}
-
-func TestResolveCursorRegistryTargets(t *testing.T) {
-	isolateConfig(t)
-	cases := []struct {
-		target string
-		model  string
-	}{
-		{target: "cursor-fable5", model: "claude-fable-5-thinking-high"},
-		{target: "cursor-fable", model: "claude-fable-5-thinking-high"},
-		{target: "fable5-cursor", model: "claude-fable-5-thinking-high"},
-		{target: "cursor/claude-fable-5", model: "claude-fable-5-thinking-high"},
-		{target: "claude-fable5-cursor", model: "claude-fable-5-thinking-high"},
-		{target: "claude-fable-5-cursor", model: "claude-fable-5-thinking-high"},
-		{target: "cursor-opus5", model: "claude-opus-5-thinking-high"},
-		{target: "cursor-opus", model: "claude-opus-5-thinking-high"},
-		{target: "opus5-cursor", model: "claude-opus-5-thinking-high"},
-		{target: "cursor/claude-opus-5", model: "claude-opus-5-thinking-high"},
-		{target: "claude-opus5-cursor", model: "claude-opus-5-thinking-high"},
-		{target: "claude-opus-5-cursor", model: "claude-opus-5-thinking-high"},
-		{target: "cursor-sonnet5", model: "claude-sonnet-5-thinking-high"},
-		{target: "cursor-sonnet", model: "claude-sonnet-5-thinking-high"},
-		{target: "sonnet5-cursor", model: "claude-sonnet-5-thinking-high"},
-		{target: "cursor/claude-sonnet-5", model: "claude-sonnet-5-thinking-high"},
-		{target: "claude-sonnet5-cursor", model: "claude-sonnet-5-thinking-high"},
-		{target: "claude-sonnet-5-cursor", model: "claude-sonnet-5-thinking-high"},
-		{target: "cursor-composer", model: "composer-2.5"},
-	}
-	for _, tc := range cases {
-		got, err := Resolve(tc.target, "")
-		if err != nil {
-			t.Fatalf("Resolve(%q): %v", tc.target, err)
-		}
-		if got.Provider != "cursor" || got.Model != tc.model || got.Source != "registry" {
-			t.Fatalf("Resolve(%q)=%+v want provider=cursor model=%s source=registry", tc.target, got, tc.model)
+		if got.Provider != tc.provider || got.Model != "" || got.Source != "provider" {
+			t.Fatalf("Resolve(%q)=%+v want provider=%s empty model", tc.target, got, tc.provider)
 		}
 	}
 }
 
-func TestResolveBareCursorTarget(t *testing.T) {
+func TestResolveRejectsFormerRegistryShortNames(t *testing.T) {
 	isolateConfig(t)
-	target, err := Resolve("cursor", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if target.Provider != "cursor" || target.Model != "composer-2.5" {
-		t.Fatalf("target=%+v", target)
+	for _, target := range []string{"kimi", "qwen", "qwen37plus", "fable5-cursor", "cursor-fable5", "gpt5.5", "gpt-5.5", "mimo-openrouter-pro", "gemini-pro", "grok-fast", "openrouter/moonshotai/kimi-k2.7-code", "sonnet4.6"} {
+		if _, err := Resolve(target, ""); err == nil || !strings.Contains(err.Error(), "unsupported target") {
+			t.Fatalf("Resolve(%q) err=%v want unsupported target", target, err)
+		}
 	}
 }
 
-func TestRejectModelWithModelTarget(t *testing.T) {
-	isolateConfig(t)
-	if _, err := Resolve("gpt-5.5", "other"); err == nil {
+func TestRejectModelWithNonProviderTarget(t *testing.T) {
+	writeConfig(t, fableConfig)
+	if _, err := Resolve("fable", "other"); err == nil {
 		t.Fatal("expected error")
 	}
 }
 
-func TestResolveBuiltinSpecificMiMoTarget(t *testing.T) {
-	isolateConfig(t)
-	target, err := Resolve("mimo-openrouter-pro", "")
+func TestResolveConfiguredShortNameCandidateChain(t *testing.T) {
+	writeConfig(t, fableConfig)
+	target, err := Resolve("fable", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.Provider != "opencode" || target.Model != "openrouter/xiaomi/mimo-v2.5-pro" || target.Source != "registry" {
+	if target.Provider != "claude" || target.Model != "claude-fable-5" || target.Source != "config" || target.ModelKey != "fable" {
+		t.Fatalf("target=%+v", target)
+	}
+	candidates := CandidateTargets(target)
+	if len(candidates) != 2 || candidates[1].Provider != "cursor" || candidates[1].Model != "claude-fable-5-thinking-high" {
+		t.Fatalf("candidates=%+v", candidates)
+	}
+}
+
+func TestResolveExactModelIDPinsSingleCandidate(t *testing.T) {
+	writeConfig(t, fableConfig)
+	target, err := Resolve("claude-fable-5", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Provider != "claude" || target.Model != "claude-fable-5" || target.Source != "config" || target.ModelKey != "fable" {
+		t.Fatalf("target=%+v", target)
+	}
+	if len(target.Candidates) != 0 {
+		t.Fatalf("exact id must pin a single candidate, got %+v", target)
+	}
+}
+
+func TestResolveKimiK3ConfigKey(t *testing.T) {
+	writeConfig(t, fableConfig)
+	target, err := Resolve("kimi-k3", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Provider != "cursor" || target.Model != "kimi-k3" || target.Source != "config" {
 		t.Fatalf("target=%+v", target)
 	}
 }
 
-func TestResolveDoesNotBindAmbiguousMiMoAlias(t *testing.T) {
-	isolateConfig(t)
-	if _, err := Resolve("mimo", ""); err == nil {
-		t.Fatal("expected ambiguous mimo alias to be unsupported without config.models")
-	}
-}
-
-func TestResolveGeminiRegistryTarget(t *testing.T) {
-	isolateConfig(t)
-	target, err := Resolve("gemini-pro", "")
+func TestResolveExactModelIDIsCaseInsensitive(t *testing.T) {
+	writeConfig(t, fableConfig)
+	target, err := Resolve("Kimi-K3", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.Provider != "antigravity" || target.Model != "pro" || target.Source != "registry" {
+	if target.Provider != "cursor" || target.Model != "kimi-k3" {
 		t.Fatalf("target=%+v", target)
 	}
 }
 
-func TestResolveClaudeRegistryTargetUsesCLIModelAlias(t *testing.T) {
-	isolateConfig(t)
-	target, err := Resolve("sonnet4.6", "")
+func TestResolveExactModelIDAmbiguousFails(t *testing.T) {
+	writeConfig(t, ambiguousConfig)
+	if _, err := Resolve("shared-id", ""); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestResolveProviderUsesConfiguredShortName(t *testing.T) {
+	writeConfig(t, fableConfig)
+	target, err := Resolve("cursor", "fable")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.Provider != "claude" || target.Model != "sonnet" || target.Source != "registry" || target.ActualID != "claude-sonnet-4-6" {
+	if target.Provider != "cursor" || target.Model != "claude-fable-5-thinking-high" || target.Source != "provider" {
 		t.Fatalf("target=%+v", target)
 	}
 }
 
-func TestResolveClaudeActualIDTargetPreservesExplicitModelID(t *testing.T) {
-	isolateConfig(t)
-	target, err := Resolve("claude-opus-4-7", "")
+func TestResolveProviderExactIDPinsMatchingCandidate(t *testing.T) {
+	writeConfig(t, fableConfig)
+	target, err := Resolve("cursor", "claude-fable-5-thinking-high")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.Provider != "claude" || target.Model != "claude-opus-4-7" || target.Source != "registry" || target.ModelKey != "opus4.7" {
+	if target.Provider != "cursor" || target.Model != "claude-fable-5-thinking-high" || target.Source != "provider" {
 		t.Fatalf("target=%+v", target)
 	}
 }
 
-func TestResolveProviderExplicitActualModelIDPreservesModel(t *testing.T) {
+func TestResolveProviderRejectsExactIDOwnedByAnotherProvider(t *testing.T) {
+	writeConfig(t, fableConfig)
+	if _, err := Resolve("cursor", "claude-fable-5"); err == nil || !strings.Contains(err.Error(), "belongs to provider") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestResolveProviderPassesThroughUnknownModelID(t *testing.T) {
 	isolateConfig(t)
-	target, err := Resolve("claude", "claude-opus-4-7")
+	target, err := Resolve("claude", "sonnet")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.Provider != "claude" || target.Model != "claude-opus-4-7" || target.Source != "provider" || target.ModelKey != "opus4.7" {
+	if target.Provider != "claude" || target.Model != "sonnet" || target.Source != "provider" {
 		t.Fatalf("target=%+v", target)
 	}
 }
 
-func TestResolveRejectsRegistryAliasOwnedByAnotherProvider(t *testing.T) {
-	isolateConfig(t)
-	cases := []struct {
-		provider string
-		model    string
-	}{
-		{provider: "codex", model: "opus"},
-		{provider: "claude", model: "gpt5.5"},
-		{provider: "opencode", model: "sonnet"},
-		{provider: "antigravity", model: "grok-fast"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.provider+"_"+tc.model, func(t *testing.T) {
-			target, err := Resolve(tc.provider, tc.model)
-			if err == nil {
-				t.Fatalf("expected provider mismatch, target=%+v", target)
-			}
-			if target.Provider != "" || target.Model != "" || target.ModelKey != "" || target.ActualID != "" || len(target.Candidates) != 0 {
-				t.Fatalf("mismatch must not return cross-provider metadata: %+v", target)
-			}
-		})
+func TestResolveProviderShortNameMissingCandidateFails(t *testing.T) {
+	writeConfig(t, fableConfig)
+	if _, err := Resolve("codex", "fable"); err == nil || !strings.Contains(err.Error(), "has no codex candidate") {
+		t.Fatalf("err=%v", err)
 	}
 }
 
@@ -247,29 +282,8 @@ func TestResolveGeminiProviderAlias(t *testing.T) {
 	}
 }
 
-func TestResolveGrokDefaultsToNativeModel(t *testing.T) {
-	isolateConfig(t)
-	target, err := Resolve("grok", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if target.Provider != "grok" || target.Model != "grok-4.5" || target.Requested != "grok" {
-		t.Fatalf("target=%+v", target)
-	}
-}
-
 func TestResolveGrokUsesConfiguredCandidateChain(t *testing.T) {
-	writeConfig(t, `{
-  "version": 1,
-  "claude_transport": "print",
-  "models": {
-    "grok": [
-      { "provider": "grok", "model": "grok-4.5" },
-      { "provider": "opencode", "model": "openrouter/x-ai/grok-4.5" }
-    ]
-  },
-  "providers": {}
-}`)
+	writeConfig(t, grokConfig)
 	target, err := Resolve("grok", "")
 	if err != nil {
 		t.Fatal(err)
@@ -284,16 +298,7 @@ func TestResolveGrokUsesConfiguredCandidateChain(t *testing.T) {
 }
 
 func TestResolveGrokExplicitModelKeepsProviderSemantics(t *testing.T) {
-	writeConfig(t, `{
-  "version": 1,
-  "claude_transport": "print",
-  "models": {
-    "grok": [
-      { "provider": "opencode", "model": "openrouter/x-ai/grok-4.5" }
-    ]
-  },
-  "providers": {}
-}`)
+	writeConfig(t, grokExplicitConfig)
 	target, err := Resolve("grok", "grok-4.5")
 	if err != nil {
 		t.Fatal(err)
@@ -303,66 +308,8 @@ func TestResolveGrokExplicitModelKeepsProviderSemantics(t *testing.T) {
 	}
 }
 
-func TestResolveGrokRegistryAlias(t *testing.T) {
-	isolateConfig(t)
-	target, err := Resolve("grok-fast", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if target.Provider != "grok" || target.Model != "grok-composer-2.5-fast" || target.Source != "registry" {
-		t.Fatalf("target=%+v", target)
-	}
-}
-
-func TestResolveOldGrokBuildTargetIsNotRetained(t *testing.T) {
-	isolateConfig(t)
-	if _, err := Resolve("grok-build-0.1", ""); err == nil {
-		t.Fatal("expected old direct grok-build route to be unsupported")
-	}
-}
-
-func TestResolveGeminiGoogleModel(t *testing.T) {
-	isolateConfig(t)
-	target, err := Resolve("google/gemini-3.1-pro-preview", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if target.Provider != "antigravity" || target.Model != "pro" || target.Source != "registry" {
-		t.Fatalf("target=%+v", target)
-	}
-}
-
-func TestResolveConfiguredModelOverridesBuiltin(t *testing.T) {
-	writeConfig(t, `{
-  "version": 1,
-  "claude_transport": "print",
-  "models": {
-    "gpt5.5": [
-      { "provider": "opencode", "model": "openai/gpt-5.5" }
-    ]
-  },
-  "providers": {}
-}`)
-	target, err := Resolve("gpt5.5", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if target.Provider != "opencode" || target.Model != "openai/gpt-5.5" || target.Source != "config" {
-		t.Fatalf("target=%+v", target)
-	}
-}
-
-func TestResolveConfiguredModelCanOverrideProviderNameUnlessModelExplicit(t *testing.T) {
-	writeConfig(t, `{
-  "version": 1,
-  "claude_transport": "print",
-  "models": {
-    "codex": [
-      { "provider": "opencode", "model": "openai/gpt-5.5" }
-    ]
-  },
-  "providers": {}
-}`)
+func TestResolveConfiguredModelOverridesProviderNameUnlessModelExplicit(t *testing.T) {
+	writeConfig(t, codexOverrideConfig)
 	target, err := Resolve("codex", "")
 	if err != nil {
 		t.Fatal(err)
@@ -379,18 +326,19 @@ func TestResolveConfiguredModelCanOverrideProviderNameUnlessModelExplicit(t *tes
 	}
 }
 
+func TestResolveConfiguredShortNameCanReplaceFormerBuiltin(t *testing.T) {
+	writeConfig(t, gptConfig)
+	target, err := Resolve("gpt5.5", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Provider != "opencode" || target.Model != "openai/gpt-5.5" || target.Source != "config" {
+		t.Fatalf("target=%+v", target)
+	}
+}
+
 func TestResolveConfiguredModelCandidates(t *testing.T) {
-	writeConfig(t, `{
-  "version": 1,
-  "claude_transport": "print",
-  "models": {
-    "mimo-pro": [
-      { "provider": "opencode", "model": "openrouter/xiaomi/mimo-v2.5-pro" },
-      { "provider": "opencode", "model": "opencode/mimo-v2.5-free" }
-    ]
-  },
-  "providers": {}
-}`)
+	writeConfig(t, mimoConfig)
 	target, err := Resolve("mimo-pro", "")
 	if err != nil {
 		t.Fatal(err)
@@ -398,73 +346,54 @@ func TestResolveConfiguredModelCandidates(t *testing.T) {
 	if target.Provider != "opencode" || target.Model != "openrouter/xiaomi/mimo-v2.5-pro" || len(target.Candidates) != 2 {
 		t.Fatalf("target=%+v", target)
 	}
-	candidates := CandidateTargets(target)
-	if len(candidates) != 2 || candidates[1].Model != "opencode/mimo-v2.5-free" {
-		t.Fatalf("candidates=%+v", candidates)
-	}
 }
 
 func TestResolveProviderUsesConfiguredModelAlias(t *testing.T) {
-	writeConfig(t, `{
-  "version": 1,
-  "claude_transport": "print",
-  "models": {
-    "mimo-pro": [
-      { "provider": "opencode", "model": "openrouter/xiaomi/mimo-v2.5-pro" }
-    ]
-  },
-  "providers": {}
-}`)
-	target, err := Resolve("opencode", "mimo-pro")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if target.Provider != "opencode" || target.Model != "openrouter/xiaomi/mimo-v2.5-pro" || target.Source != "provider" {
-		t.Fatalf("target=%+v", target)
-	}
-}
-
-func TestResolveProviderPreservesConfiguredCandidateChain(t *testing.T) {
-	writeConfig(t, `{
-  "version": 1,
-  "claude_transport": "print",
-  "models": {
-    "mimo-pro": [
-      { "provider": "opencode", "model": "openrouter/xiaomi/mimo-v2.5-pro" },
-      { "provider": "opencode", "model": "opencode/mimo-v2.5-free" }
-    ]
-  },
-  "providers": {}
-}`)
+	writeConfig(t, mimoConfig)
 	target, err := Resolve("opencode", "mimo-pro")
 	if err != nil {
 		t.Fatal(err)
 	}
 	candidates := CandidateTargets(target)
-	if len(candidates) != 2 || candidates[1].Model != "opencode/mimo-v2.5-free" {
+	if target.Provider != "opencode" || target.Model != "openrouter/xiaomi/mimo-v2.5-pro" || len(candidates) != 2 {
 		t.Fatalf("target=%+v candidates=%+v", target, candidates)
 	}
 }
 
-func TestSupportedTargetsIncludesConfigModelsAndBuiltins(t *testing.T) {
-	writeConfig(t, `{
-  "version": 1,
-  "claude_transport": "print",
-  "models": {
-    "mimo-pro": [
-      { "provider": "opencode", "model": "openrouter/xiaomi/mimo-v2.5-pro" }
-    ]
-  },
-  "providers": {}
-}`)
+func TestSupportedTargetsIncludesConfigModelsAndProvidersOnly(t *testing.T) {
+	writeConfig(t, mimoConfig)
 	targets := SupportedTargets()
-	for _, target := range []string{"mimo-pro", "mimo-openrouter-pro", "mimo-opencode-free", "gemini-pro", "grok", "grok-fast"} {
+	for _, target := range []string{"mimo-pro", "codex", "claude", "cursor", "grok", "gemini"} {
 		if !contains(targets, target) {
 			t.Fatalf("missing %q in targets=%v", target, targets)
 		}
 	}
-	if contains(targets, "mimo") {
-		t.Fatalf("ambiguous mimo alias should not be advertised: %v", targets)
+	for _, target := range []string{"mimo-openrouter-pro", "kimi", "gemini-pro", "grok-fast", "gpt5.5"} {
+		if contains(targets, target) {
+			t.Fatalf("registry leftover %q still advertised: %v", target, targets)
+		}
+	}
+}
+
+func TestResolveBareProviderIgnoresUnrelatedBadConfigKey(t *testing.T) {
+	writeConfig(t, "{\n  \"version\": 1,\n  \"claude_transport\": \"print\",\n  \"models\": {\n    \"broken\": [{\"provider\": \"not-a-provider\", \"model\": \"x\"}],\n    \"kimi-k3\": [{\"provider\": \"cursor\", \"model\": \"kimi-k3\"}]\n  },\n  \"providers\": {}\n}")
+	target, err := Resolve("claude", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Provider != "claude" || target.Model != "" {
+		t.Fatalf("target=%+v", target)
+	}
+}
+
+func TestResolveProviderExactIDDisambiguatesAcrossProviders(t *testing.T) {
+	writeConfig(t, ambiguousConfig)
+	target, err := Resolve("cursor", "shared-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Provider != "cursor" || target.Model != "shared-id" || target.Source != "provider" {
+		t.Fatalf("target=%+v", target)
 	}
 }
 

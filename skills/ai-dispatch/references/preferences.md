@@ -18,7 +18,7 @@
 - 偏好只是默认选择，不覆盖返回 JSON 里的真实结果。
 - 遇到多个候选短名时，优先按场景下的候选池自由组合；场景内建议组合只是默认建议，不是唯一合法路径。
 - 需要查看全部用户确认模型短名时，读 `config.json models`，不要从偏好场景里反推全集。
-- 偏好里写的短名必须能被 `ai-dispatch models resolve <target>` 解析；不能解析时，先更新 `config.json models` 或换用内置 target。
+- 偏好里写的短名必须能被 `ai-dispatch models resolve <target>` 解析；不能解析时，先更新 config.json models。
 
 ## 更新规则
 

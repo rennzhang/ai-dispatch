@@ -123,14 +123,16 @@ npx skills add rennzhang/ai-dispatch -g --all
 
 ## 模型和偏好
 
-你可以直接说 `opus`、`sonnet`、`codex`、`gpt5.6-luna`、`gemini-pro`、`grok`、`grok-fast`、`cursor-fable5`、`cursor-opus5`、`cursor-sonnet5`、`cursor-composer`、`mimo-pro`、`glm`、`kimi`、`qwen` 这类短名。
+短名必须写进 ~/.ai-dispatch/config.json 的 models。没写进去的 kimi / qwen / gpt5.5 这类词会直接失败。
+
+你也可以直接说 provider 名：codex、claude、cursor、grok、opencode。
 
 ai-dispatch 有两个用户态文件：
 
 - `~/.ai-dispatch/config.json` 的 `models` 字段：你这台机器已添加的模型短名和候选池。
 - `~/.ai-dispatch/preferences.md`：你喜欢在什么场景用哪些模型。
 
-普通使用不用先配置。等你试出哪些模型在这台机器上可用，或者发现“review 总想用这几个模型”“前端 UI 总想用另几个模型”，再让 Agent 帮你维护这两个文件即可。
+短名不会开箱即用。先把确认能用的模型写进 config.json models，再在 preferences.md 里写场景偏好。
 
 更新可用模型池时，可以直接说：
 
@@ -182,7 +184,7 @@ ai-dispatch 当前内置支持六类本机 CLI provider：
 ai-dispatch send gpt5.6 "implement the fix" --effort xhigh --json-result
 ```
 
-内置 Codex GPT-5.6 target 开放 `gpt5.6`（→ `gpt-5.6-sol`）、`gpt5.6-terra` 和 `gpt5.6-luna`。三个模型都允许 `low | medium | high | xhigh | max`；最低档 `none` 和 `minimal` 不开放。`codex` 默认模型仍是 GPT-5.5，不会被替换。
+Codex 短名（gpt5.6-sol 等）需要写进 config.json。裸 send codex 使用 Codex CLI 自己的默认模型。
 
 合法值：`auto | none | minimal | low | medium | high | xhigh | max`。省略或 `auto` 表示不覆盖各 CLI 默认。只有当前 provider/模型确认支持的精确档位才会传递；否则回到 `auto`，结果里会带 `requested_effort` / `applied_effort` / `effort_fallback_reason`，不会静默降到相邻档。详见 [Reasoning Effort 设计](docs/reasoning-effort-design.md)。
 

@@ -119,29 +119,6 @@ func TestBuildClaudeAPIPromptFileUsesStdin(t *testing.T) {
 	}
 }
 
-func TestBuildClaudeDoesNotOverrideBackendModelForRegistryAlias(t *testing.T) {
-	t.Setenv("ANTHROPIC_MODEL", "openrouter/anthropic/claude-opus-4")
-	target := routing.DispatchTarget{
-		Requested: "sonnet4.6",
-		Provider:  "claude",
-		Model:     "sonnet",
-		Source:    "registry",
-		ActualID:  "claude-sonnet-4-6",
-	}
-	spec, err := Provider{}.Build(providers.BuildRequest{
-		Prompt:          "hello",
-		Target:          target,
-		ProviderOptions: map[string]string{"transport": "api"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	joined := strings.Join(spec.Args, "\x00")
-	if strings.Contains(joined, "--model") {
-		t.Fatalf("registry alias should not override backend model: %#v", spec.Args)
-	}
-}
-
 func TestBuildClaudeAPIArgsUsesOpusAlias(t *testing.T) {
 	target := routing.DispatchTarget{Requested: "opus4.7", Provider: "claude", Model: "opus"}
 	spec, err := Provider{}.Build(providers.BuildRequest{

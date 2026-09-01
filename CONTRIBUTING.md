@@ -4,7 +4,7 @@ Keep ai-dispatch small.
 
 Preferred change order:
 
-1. Change model registry data when routing data is enough.
+1. Put user short names in ~/.ai-dispatch/config.json models. Do not add a bundled model registry.
 2. Change provider command construction only when a CLI contract changed.
 3. Add a provider adapter only for a new CLI, auth flow, process protocol, output format, or session protocol.
 

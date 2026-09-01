@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.7.0
+
+- Remove the bundled model registry. Executable short names now come only from ~/.ai-dispatch/config.json.
+- Bare unknown names such as kimi, qwen, gpt5.5, and openrouter/... fail closed instead of guessing a provider.
+- Bare provider targets (codex, claude, cursor, grok, opencode, antigravity/gemini) use the provider CLI default model.
+- Exact model IDs that appear in config.models pin that single candidate.
+- Explicit send <provider> --model still pins a route; --model may be a config short name, a config model id, or a raw provider id.
+- Drop leftover registry help text, Claude alias-source dead code, and OpenRouter-era smoke/matrix defaults.
+
 ## v0.6.2
 
 - Reject legacy-looking `provider:model` and `model:provider` colon inputs instead of inferring them as raw model ids; use `send <provider> --model <model>`.

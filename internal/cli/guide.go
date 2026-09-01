@@ -28,7 +28,7 @@ func guide(argv []string, stdout io.Writer, stderr io.Writer) int {
 }
 
 func printModelGuide(stdout io.Writer) error {
-	models, err := routing.RegistryModels()
+	models, err := routing.ConfiguredModels()
 	if err != nil {
 		return err
 	}
@@ -50,7 +50,7 @@ func printModelGuide(stdout io.Writer) error {
 	fmt.Fprintln(stdout, "")
 	fmt.Fprintln(stdout, "请求的 target 只是意图，真实执行结果必须看返回 JSON 里的 `provider_used`、`model_used`、`requested_target`、`route_trace`、`degraded`、`degrade_reason`。")
 	fmt.Fprintln(stdout, "")
-	fmt.Fprintln(stdout, "`~/.ai-dispatch/config.json` 的 `models` 字段优先于内置 registry，用于维护用户认可的短名到 provider/model 候选链。")
+	fmt.Fprintln(stdout, "`~/.ai-dispatch/config.json` 的 `models` 是唯一可执行短名路由。config 里没有的短名会直接失败。")
 	fmt.Fprintln(stdout, "")
 	fmt.Fprintln(stdout, "## Provider")
 	fmt.Fprintln(stdout, "")
@@ -58,19 +58,21 @@ func printModelGuide(stdout io.Writer) error {
 	fmt.Fprintln(stdout, "- `claude`：调用 `claude -p`。")
 	fmt.Fprintln(stdout, "- `opencode`：调用 `opencode run`。")
 	fmt.Fprintln(stdout, "- `antigravity`：调用 `agy --print`。")
+	fmt.Fprintln(stdout, "- `grok`：调用 Grok CLI。")
+	fmt.Fprintln(stdout, "- `cursor`：调用 `cursor-agent`。")
 	fmt.Fprintln(stdout, "")
-	fmt.Fprintln(stdout, "## Built-in registry targets")
+	fmt.Fprintln(stdout, "## Configured short names")
 	fmt.Fprintln(stdout, "")
 	if len(models) == 0 {
-		fmt.Fprintln(stdout, "当前 registry 没有可展示的 target。")
+		fmt.Fprintln(stdout, "当前 config.json 没有 models。把确认能用的短名写进 ~/.ai-dispatch/config.json。")
 		return nil
 	}
 	for _, model := range models {
-		aliases := ""
-		if len(model.Aliases) > 0 {
-			aliases = "；aliases: `" + strings.Join(model.Aliases, "`, `") + "`"
+		parts := make([]string, 0, len(model.Candidates))
+		for _, candidate := range model.Candidates {
+			parts = append(parts, candidate.Provider+"/"+candidate.Model)
 		}
-		fmt.Fprintf(stdout, "- `%s` -> provider `%s`, model `%s`%s\n", model.Key, model.DispatchRunner, firstNonEmpty(model.DispatchModel, model.ActualModelID), aliases)
+		fmt.Fprintf(stdout, "- %s -> %s\n", model.Key, strings.Join(parts, "; "))
 	}
 	return nil
 }

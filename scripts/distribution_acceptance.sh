@@ -341,7 +341,7 @@ for entry in direct dev path codex claude fallback homebrew-layout npm; do
   fi
 
   env -i "${ENTRY_ENV[@]}" "${ENTRY_COMMAND[@]}" models resolve grok --format json >"$WORK/$entry-route.json"
-  validate_json "$WORK/$entry-route.json" 'value.provider === "grok" && value.model === "grok-4.5"'
+  validate_json "$WORK/$entry-route.json" 'value.provider === "grok" && (value.model === undefined || value.model === "")'
 
   output_file="$WORK/$entry-output.md"
   args_file="$WORK/$entry-provider.args"

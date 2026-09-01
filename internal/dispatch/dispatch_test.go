@@ -23,7 +23,7 @@ func TestExecuteDisabledDoesNotRunProvider(t *testing.T) {
 	t.Setenv("AI_DISPATCH_CONFIG", filepath.Join(t.TempDir(), "missing-config.json"))
 	result := Execute(contract.DispatchRequest{
 		Command: "send",
-		Target:  "gpt5.5",
+		Target:  "codex",
 		Prompt:  "hello",
 	})
 	if result.OK || result.Status != contract.StatusDisabled || result.ProviderUsed != "codex" {
@@ -83,6 +83,7 @@ func TestExecuteRejectsUnsupportedTarget(t *testing.T) {
 }
 
 func TestResumeInfersProviderFromRunstore(t *testing.T) {
+	t.Setenv("AI_DISPATCH_CONFIG", filepath.Join(t.TempDir(), "missing-config.json"))
 	root := t.TempDir()
 	t.Setenv("AI_DISPATCH_RUNS_DIR", root)
 	t.Setenv("AI_DISPATCH_GO_PROVIDER_EXECUTION", "")
@@ -128,7 +129,7 @@ func TestGrokRoutesToGrokProvider(t *testing.T) {
 		Target:  "grok",
 		Prompt:  "hello",
 	})
-	if result.Status != contract.StatusDisabled || result.ProviderUsed != "grok" || result.ModelUsed != "grok-4.5" {
+	if result.Status != contract.StatusDisabled || result.ProviderUsed != "grok" || result.ModelUsed != "" {
 		t.Fatalf("result=%+v", result)
 	}
 }
@@ -410,6 +411,7 @@ func TestNonOpenCodeProviderDoesNotUseOpenCodeLock(t *testing.T) {
 }
 
 func TestResumeTargetResolvesModelAlias(t *testing.T) {
+	t.Setenv("AI_DISPATCH_CONFIG", filepath.Join(t.TempDir(), "missing-config.json"))
 	root := t.TempDir()
 	t.Setenv("AI_DISPATCH_RUNS_DIR", root)
 	t.Setenv("AI_DISPATCH_GO_PROVIDER_EXECUTION", "")
@@ -423,16 +425,17 @@ func TestResumeTargetResolvesModelAlias(t *testing.T) {
 	}
 	result := Execute(contract.DispatchRequest{
 		Command:   "resume",
-		Target:    "gpt5.5",
+		Target:    "codex",
 		SessionID: "s1",
 		Prompt:    "continue",
 	})
-	if result.ProviderUsed != "codex" || result.RequestedTarget != "gpt5.5" {
+	if result.ProviderUsed != "codex" || result.RequestedTarget != "codex" {
 		t.Fatalf("result=%+v", result)
 	}
 }
 
 func TestResumeRejectsProviderMismatch(t *testing.T) {
+	t.Setenv("AI_DISPATCH_CONFIG", filepath.Join(t.TempDir(), "missing-config.json"))
 	root := t.TempDir()
 	t.Setenv("AI_DISPATCH_RUNS_DIR", root)
 	previous := contract.SuccessResult("hello")
@@ -640,7 +643,7 @@ func TestExecuteWithOptionsNormalizesEmptyEffort(t *testing.T) {
 	t.Setenv("AI_DISPATCH_CONFIG", filepath.Join(t.TempDir(), "missing-config.json"))
 	result := ExecuteWithOptions(contract.DispatchRequest{
 		Command: "send",
-		Target:  "gpt5.5",
+		Target:  "codex",
 		Prompt:  "hello",
 	}, Options{})
 	if result.RequestedEffort != contract.EffortAuto || result.AppliedEffort != contract.EffortAuto {
@@ -661,7 +664,7 @@ func TestCanceledBeforeExecutionFillsRouteStepEffort(t *testing.T) {
 	cancel()
 	result := ExecuteWithOptions(contract.DispatchRequest{
 		Command: "send",
-		Target:  "gpt5.5",
+		Target:  "codex",
 		Prompt:  "hello",
 		Effort:  contract.EffortHigh,
 	}, Options{Context: ctx})

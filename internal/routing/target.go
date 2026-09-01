@@ -1,17 +1,12 @@
 package routing
 
 import (
-	"embed"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/rennzhang/ai-dispatch/internal/config"
 )
-
-//go:embed models.json
-var modelRegistryFS embed.FS
 
 type DispatchTarget struct {
 	Requested  string           `json:"requested"`
@@ -31,6 +26,11 @@ type RouteCandidate struct {
 	ActualID string `json:"actual_id,omitempty"`
 }
 
+type ConfiguredModel struct {
+	Key        string
+	Candidates []RouteCandidate
+}
+
 func Resolve(rawTarget string, explicitModel string) (DispatchTarget, error) {
 	target := strings.TrimSpace(rawTarget)
 	model := strings.TrimSpace(explicitModel)
@@ -47,95 +47,42 @@ func Resolve(rawTarget string, explicitModel string) (DispatchTarget, error) {
 		} else if ok {
 			return configured, nil
 		}
+		if exact, ok, err := lookupConfiguredExactID(target); err != nil {
+			return DispatchTarget{}, err
+		} else if ok {
+			return exact, nil
+		}
+		if provider, ok := providerName(normalized); ok {
+			return providerTarget(target, provider, "")
+		}
+		return DispatchTarget{}, fmt.Errorf("unsupported target: %s", rawTarget)
 	}
-	switch normalized {
-	case "codex":
-		if model == "" {
-			var err error
-			model, err = defaultProviderModel("codex")
-			if err != nil {
-				return DispatchTarget{}, err
-			}
-		}
-		return providerTarget(target, "codex", model)
-	case "opencode":
-		return providerTarget(target, "opencode", model)
-	case "claude":
-		return providerTarget(target, "claude", model)
-	case "antigravity":
-		return providerTarget(target, "antigravity", model)
-	case "grok":
-		if model == "" {
-			var err error
-			model, err = defaultProviderModel("grok")
-			if err != nil {
-				return DispatchTarget{}, err
-			}
-		}
-		return providerTarget(target, "grok", model)
-	case "cursor":
-		if model == "" {
-			var err error
-			model, err = defaultProviderModel("cursor")
-			if err != nil {
-				return DispatchTarget{}, err
-			}
-		}
-		return providerTarget(target, "cursor", model)
-	case "gemini":
-		if model == "" {
-			var err error
-			model, err = defaultProviderModel("antigravity")
-			if err != nil {
-				return DispatchTarget{}, err
-			}
-		}
-		return providerTarget(target, "antigravity", model)
-	}
-	if model != "" {
+	provider, ok := providerName(normalized)
+	if !ok {
 		return DispatchTarget{}, fmt.Errorf("cannot combine explicit model with model target")
 	}
-	if match, ok, err := lookupRegistryMatch(target); err != nil {
-		return DispatchTarget{}, err
-	} else if ok {
-		entry := match.entry
-		provider := normalizeProvider(entry.DispatchRunner)
-		if provider == "" {
-			provider = normalizeProvider(entry.Provider)
-		}
-		model := entryModelForProvider(entry, provider)
-		if preserveExplicitActualModelID(provider, entry, match) {
-			model = strings.TrimSpace(target)
-		}
-		return DispatchTarget{
-			Requested: target,
-			Provider:  provider,
-			Model:     model,
-			Source:    "registry",
-			ModelKey:  entry.Key,
-			ActualID:  entry.ActualModelID,
-		}, nil
+	return providerTarget(target, provider, model)
+}
+
+func providerName(normalized string) (string, bool) {
+	switch normalized {
+	case "codex", "opencode", "claude", "antigravity", "grok", "cursor":
+		return normalized, true
+	case "gemini":
+		return "antigravity", true
+	default:
+		return "", false
 	}
-	if geminiModel, ok := geminiAliasModel(normalized); ok {
-		return DispatchTarget{Requested: target, Provider: "antigravity", Model: geminiModel, Source: "alias"}, nil
-	}
-	if strings.HasPrefix(normalized, "gpt-") {
-		return DispatchTarget{Requested: target, Provider: "codex", Model: target, Source: "inferred"}, nil
-	}
-	if strings.HasPrefix(normalized, "claude-") || strings.Contains(normalized, "sonnet") || strings.Contains(normalized, "opus") {
-		return DispatchTarget{Requested: target, Provider: "claude", Model: target, Source: "inferred"}, nil
-	}
-	if strings.HasPrefix(normalized, "google/gemini-") {
-		return DispatchTarget{Requested: target, Provider: "antigravity", Model: target, Source: "inferred"}, nil
-	}
-	if strings.HasPrefix(normalized, "openrouter/") || strings.HasPrefix(normalized, "openai/") {
-		return DispatchTarget{Requested: target, Provider: "opencode", Model: target, Source: "inferred"}, nil
-	}
-	return DispatchTarget{}, fmt.Errorf("unsupported target: %s", rawTarget)
 }
 
 func providerTarget(target string, provider string, model string) (DispatchTarget, error) {
-	resolved := model
+	if strings.TrimSpace(model) == "" {
+		return DispatchTarget{
+			Requested: target,
+			Provider:  provider,
+			Source:    "provider",
+		}, nil
+	}
 	if configured, ok, err := lookupConfiguredModelTarget(model); err != nil {
 		return DispatchTarget{}, err
 	} else if ok {
@@ -152,49 +99,33 @@ func providerTarget(target string, provider string, model string) (DispatchTarge
 		}
 		return DispatchTarget{}, fmt.Errorf("model alias %q has no %s candidate", model, provider)
 	}
-	if match, ok, err := lookupRegistryMatch(model); err != nil {
+	hits, err := lookupConfiguredExactHits(model)
+	if err != nil {
 		return DispatchTarget{}, err
-	} else if ok {
-		entry := match.entry
-		entryProvider := registryEntryProvider(entry)
-		if entryProvider != provider {
-			return DispatchTarget{}, fmt.Errorf("model alias %q belongs to provider %q, not %q", model, entryProvider, provider)
+	}
+	matches := []DispatchTarget{}
+	for _, hit := range hits {
+		if hit.Provider == provider {
+			hit.Requested = target
+			hit.Source = "provider"
+			matches = append(matches, hit)
 		}
-		if preserveExplicitActualModelID(provider, entry, match) {
-			resolved = strings.TrimSpace(model)
-		} else {
-			resolved = entryModelForProvider(entry, provider)
-		}
-		return DispatchTarget{
-			Requested: target,
-			Provider:  provider,
-			Model:     resolved,
-			Source:    "provider",
-			ModelKey:  entry.Key,
-			ActualID:  entry.ActualModelID,
-		}, nil
+	}
+	if len(matches) > 0 {
+		first := matches[0]
+		first.Candidates = nil
+		return first, nil
+	}
+	if len(hits) > 0 {
+		return DispatchTarget{}, fmt.Errorf("model id %q belongs to provider %q, not %q", model, hits[0].Provider, provider)
 	}
 	return DispatchTarget{
 		Requested: target,
 		Provider:  provider,
-		Model:     resolved,
+		Model:     model,
 		Source:    "provider",
+		ActualID:  model,
 	}, nil
-}
-
-func registryEntryProvider(entry registryEntry) string {
-	provider := normalizeProvider(entry.DispatchRunner)
-	if provider == "" {
-		provider = normalizeProvider(entry.Provider)
-	}
-	return provider
-}
-
-func preserveExplicitActualModelID(provider string, entry registryEntry, match registryMatch) bool {
-	return provider == "claude" &&
-		match.kind == registryMatchActualID &&
-		strings.TrimSpace(entry.ActualModelID) != "" &&
-		strings.TrimSpace(entry.ActualModelID) != strings.TrimSpace(entryModelForProvider(entry, provider))
 }
 
 func lookupConfiguredModelTarget(value string) (DispatchTarget, bool, error) {
@@ -210,17 +141,41 @@ func lookupConfiguredModelTarget(value string) (DispatchTarget, bool, error) {
 		if strings.ToLower(strings.TrimSpace(key)) != normalized {
 			continue
 		}
-		candidates := make([]DispatchTarget, 0, len(routes))
-		for _, route := range routes {
+		candidates, err := configuredCandidates(strings.TrimSpace(value), key, routes)
+		if err != nil {
+			return DispatchTarget{}, false, err
+		}
+		return withCandidates(strings.TrimSpace(value), candidates), true, nil
+	}
+	return DispatchTarget{}, false, nil
+}
+
+func lookupConfiguredExactHits(value string) ([]DispatchTarget, error) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		return nil, nil
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]string, 0, len(cfg.Models))
+	for key := range cfg.Models {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var hits []DispatchTarget
+	for _, key := range keys {
+		for _, route := range cfg.Models[key] {
 			provider := normalizeProvider(route.Provider)
 			model := strings.TrimSpace(route.Model)
-			if provider == "" {
-				return DispatchTarget{}, false, fmt.Errorf("config.models.%s has empty provider", key)
+			if strings.ToLower(model) != normalized {
+				continue
 			}
-			if !implementedProvider(provider) {
-				return DispatchTarget{}, false, fmt.Errorf("config.models.%s uses unsupported provider %q", key, route.Provider)
+			if provider == "" || !implementedProvider(provider) {
+				continue
 			}
-			candidates = append(candidates, DispatchTarget{
+			hits = append(hits, DispatchTarget{
 				Requested: strings.TrimSpace(value),
 				Provider:  provider,
 				Model:     model,
@@ -229,12 +184,53 @@ func lookupConfiguredModelTarget(value string) (DispatchTarget, bool, error) {
 				ActualID:  model,
 			})
 		}
-		if len(candidates) == 0 {
-			return DispatchTarget{}, false, fmt.Errorf("config.models.%s has no candidates", key)
-		}
-		return withCandidates(strings.TrimSpace(value), candidates), true, nil
 	}
-	return DispatchTarget{}, false, nil
+	return hits, nil
+}
+
+func lookupConfiguredExactID(value string) (DispatchTarget, bool, error) {
+	hits, err := lookupConfiguredExactHits(value)
+	if err != nil {
+		return DispatchTarget{}, false, err
+	}
+	if len(hits) == 0 {
+		return DispatchTarget{}, false, nil
+	}
+	first := hits[0]
+	for _, hit := range hits[1:] {
+		if hit.Provider != first.Provider || hit.Model != first.Model {
+			return DispatchTarget{}, false, fmt.Errorf("exact model id %q is ambiguous in config.models", value)
+		}
+	}
+	first.Requested = strings.TrimSpace(value)
+	first.Candidates = nil
+	return first, true, nil
+}
+
+func configuredCandidates(requested string, key string, routes []config.ModelRoute) ([]DispatchTarget, error) {
+	candidates := make([]DispatchTarget, 0, len(routes))
+	for _, route := range routes {
+		provider := normalizeProvider(route.Provider)
+		model := strings.TrimSpace(route.Model)
+		if provider == "" {
+			return nil, fmt.Errorf("config.models.%s has empty provider", key)
+		}
+		if !implementedProvider(provider) {
+			return nil, fmt.Errorf("config.models.%s uses unsupported provider %q", key, route.Provider)
+		}
+		candidates = append(candidates, DispatchTarget{
+			Requested: requested,
+			Provider:  provider,
+			Model:     model,
+			Source:    "config",
+			ModelKey:  strings.TrimSpace(key),
+			ActualID:  model,
+		})
+	}
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("config.models.%s has no candidates", key)
+	}
+	return candidates, nil
 }
 
 func withCandidates(requested string, candidates []DispatchTarget) DispatchTarget {
@@ -251,6 +247,8 @@ func withCandidates(requested string, candidates []DispatchTarget) DispatchTarge
 				ActualID: candidate.ActualID,
 			})
 		}
+	} else {
+		first.Candidates = nil
 	}
 	return first
 }
@@ -281,169 +279,36 @@ func normalizeProvider(provider string) string {
 	return provider
 }
 
-func geminiAliasModel(normalized string) (string, bool) {
-	switch normalized {
-	case "gemini-flash", "geminiflash":
-		return "flash", true
-	case "gemini-pro", "geminipro":
-		return "pro", true
-	case "gemini-pro-low", "geminiprolow":
-		return "pro-low", true
-	default:
-		return "", false
-	}
-}
-
-type registryPayload struct {
-	Models []registryEntry `json:"models"`
-}
-
-type registryEntry struct {
-	Key            string   `json:"key"`
-	Provider       string   `json:"provider"`
-	DispatchRunner string   `json:"dispatchRunner"`
-	DispatchModel  string   `json:"dispatchModel"`
-	ActualModelID  string   `json:"actualModelId"`
-	Aliases        []string `json:"aliases"`
-}
-
-type RegistryModel struct {
-	Key            string
-	Provider       string
-	DispatchRunner string
-	DispatchModel  string
-	ActualModelID  string
-	Aliases        []string
-}
-
-func RegistryModels() ([]RegistryModel, error) {
-	payload, err := loadRegistry()
-	if err != nil {
-		return nil, err
-	}
-	models := []RegistryModel{}
-	for _, entry := range payload.Models {
-		provider := normalizeProvider(entry.DispatchRunner)
-		if provider == "" {
-			provider = normalizeProvider(entry.Provider)
+func ConfiguredModels() ([]ConfiguredModel, error) {
+	keys := ConfigModelTargets()
+	models := make([]ConfiguredModel, 0, len(keys))
+	for _, key := range keys {
+		target, ok, err := lookupConfiguredModelTarget(key)
+		if err != nil {
+			return nil, err
 		}
-		if !implementedProvider(provider) || strings.TrimSpace(entry.Key) == "" {
+		if !ok {
 			continue
 		}
-		models = append(models, RegistryModel{
-			Key:            strings.TrimSpace(entry.Key),
-			Provider:       strings.TrimSpace(entry.Provider),
-			DispatchRunner: provider,
-			DispatchModel:  strings.TrimSpace(entry.DispatchModel),
-			ActualModelID:  strings.TrimSpace(entry.ActualModelID),
-			Aliases:        cleanStrings(entry.Aliases),
+		models = append(models, ConfiguredModel{
+			Key:        key,
+			Candidates: routeCandidates(target),
 		})
 	}
-	sort.Slice(models, func(i, j int) bool {
-		return models[i].Key < models[j].Key
-	})
 	return models, nil
 }
 
-type registryMatchKind string
-
-const (
-	registryMatchKey           registryMatchKind = "key"
-	registryMatchActualID      registryMatchKind = "actualModelId"
-	registryMatchDispatchModel registryMatchKind = "dispatchModel"
-	registryMatchAlias         registryMatchKind = "alias"
-)
-
-type registryMatch struct {
-	entry registryEntry
-	kind  registryMatchKind
-}
-
-func defaultProviderModel(provider string) (string, error) {
-	key := map[string]string{
-		"codex":       "gpt5.5",
-		"antigravity": "gemini-flash",
-		"grok":        "grok4.5",
-		"cursor":      "cursor-composer",
-	}[provider]
-	if key == "" {
-		return "", nil
+func routeCandidates(target DispatchTarget) []RouteCandidate {
+	if len(target.Candidates) > 0 {
+		return target.Candidates
 	}
-	match, ok, err := lookupRegistryMatch(key)
-	if err != nil {
-		return "", err
-	}
-	if !ok {
-		return "", fmt.Errorf("default model target %q is missing from registry", key)
-	}
-	return entryModelForProvider(match.entry, provider), nil
-}
-
-func lookupRegistryMatch(value string) (registryMatch, bool, error) {
-	normalized := strings.ToLower(strings.TrimSpace(value))
-	if normalized == "" {
-		return registryMatch{}, false, nil
-	}
-	payload, err := loadRegistry()
-	if err != nil {
-		return registryMatch{}, false, err
-	}
-	for _, entry := range payload.Models {
-		candidates := []struct {
-			value string
-			kind  registryMatchKind
-		}{
-			{entry.Key, registryMatchKey},
-			{entry.ActualModelID, registryMatchActualID},
-			{entry.DispatchModel, registryMatchDispatchModel},
-		}
-		for _, alias := range entry.Aliases {
-			candidates = append(candidates, struct {
-				value string
-				kind  registryMatchKind
-			}{alias, registryMatchAlias})
-		}
-		for _, candidate := range candidates {
-			if strings.ToLower(strings.TrimSpace(candidate.value)) == normalized {
-				return registryMatch{entry: entry, kind: candidate.kind}, true, nil
-			}
-		}
-	}
-	return registryMatch{}, false, nil
-}
-
-func RegistryTargets() []string {
-	payload, err := loadRegistry()
-	if err != nil {
-		return nil
-	}
-	seen := map[string]bool{}
-	targets := []string{}
-	for _, target := range ConfigModelTargets() {
-		if target == "" || seen[target] {
-			continue
-		}
-		seen[target] = true
-		targets = append(targets, target)
-	}
-	for _, entry := range payload.Models {
-		provider := normalizeProvider(entry.DispatchRunner)
-		if provider == "" {
-			provider = normalizeProvider(entry.Provider)
-		}
-		if !implementedProvider(provider) || strings.TrimSpace(entry.Key) == "" {
-			continue
-		}
-		for _, target := range registryTargetNames(entry) {
-			if target == "" || seen[target] {
-				continue
-			}
-			seen[target] = true
-			targets = append(targets, target)
-		}
-	}
-	sort.Strings(targets)
-	return targets
+	return []RouteCandidate{{
+		Provider: target.Provider,
+		Model:    target.Model,
+		Source:   target.Source,
+		ModelKey: target.ModelKey,
+		ActualID: target.ActualID,
+	}}
 }
 
 func ConfigModelTargets() []string {
@@ -465,7 +330,7 @@ func ConfigModelTargets() []string {
 func SupportedTargets() []string {
 	seen := map[string]bool{}
 	targets := []string{}
-	for _, target := range append([]string{"codex", "opencode", "claude", "antigravity", "gemini", "gemini-flash", "gemini-pro", "grok", "cursor"}, RegistryTargets()...) {
+	for _, target := range append([]string{"codex", "opencode", "claude", "antigravity", "gemini", "grok", "cursor"}, ConfigModelTargets()...) {
 		if target == "" || seen[target] {
 			continue
 		}
@@ -475,37 +340,6 @@ func SupportedTargets() []string {
 	return targets
 }
 
-func registryTargetNames(entry registryEntry) []string {
-	names := []string{strings.TrimSpace(entry.Key)}
-	for _, alias := range entry.Aliases {
-		alias = strings.TrimSpace(alias)
-		if alias == "" {
-			continue
-		}
-		names = append(names, alias)
-	}
-	return names
-}
-
-func loadRegistry() (registryPayload, error) {
-	data, err := modelRegistryFS.ReadFile("models.json")
-	if err != nil {
-		return registryPayload{}, err
-	}
-	var payload registryPayload
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return registryPayload{}, err
-	}
-	return payload, nil
-}
-
-func entryModelForProvider(entry registryEntry, provider string) string {
-	if entry.DispatchModel != "" {
-		return entry.DispatchModel
-	}
-	return entry.ActualModelID
-}
-
 func implementedProvider(provider string) bool {
 	switch provider {
 	case "codex", "opencode", "claude", "antigravity", "grok", "cursor":
@@ -513,25 +347,4 @@ func implementedProvider(provider string) bool {
 	default:
 		return false
 	}
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func cleanStrings(values []string) []string {
-	cleaned := []string{}
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			cleaned = append(cleaned, value)
-		}
-	}
-	sort.Strings(cleaned)
-	return cleaned
 }

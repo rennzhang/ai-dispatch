@@ -5,8 +5,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 export AI_DISPATCH_GO_PROVIDER_EXECUTION=on
-codex_target="${AI_DISPATCH_SMOKE_CODEX_TARGET:-gpt5.5}"
-opencode_target="${AI_DISPATCH_SMOKE_OPENCODE_TARGET:-mimo-openrouter-pro}"
+codex_target="${AI_DISPATCH_SMOKE_CODEX_TARGET:-codex}"
+opencode_target="${AI_DISPATCH_SMOKE_OPENCODE_TARGET:-opencode}"
 
 run_smoke() {
   local name="$1"

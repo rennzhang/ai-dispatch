@@ -291,14 +291,14 @@ func TestPreferencesPathAndShow(t *testing.T) {
 	}
 }
 
-func TestGuideModelsPrintsRuntimeRegistryGuide(t *testing.T) {
+func TestGuideModelsPrintsConfigGuide(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Main([]string{"guide", "models"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%s", code, stderr.String())
 	}
 	text := stdout.String()
-	for _, want := range []string{"# 模型指南", "## Built-in registry targets", "gpt5.5", "mimo-openrouter-pro", "provider_used"} {
+	for _, want := range []string{"# 模型指南", "## Configured short names", "provider_used", "唯一可执行短名路由"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in guide:\n%s", want, text)
 		}
@@ -337,6 +337,7 @@ func TestRetiredTransportFlagFailsClosed(t *testing.T) {
 }
 
 func TestModelsResolveJSON(t *testing.T) {
+	writeCodexModelConfig(t)
 	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
 	var stdout, stderr bytes.Buffer
 	code := Main([]string{"models", "resolve", "gpt5.5"}, &stdout, &stderr)
@@ -374,6 +375,7 @@ func TestModelsResolveRejectsColonRouteSyntax(t *testing.T) {
 }
 
 func TestModelsResolveFastCapabilityJSON(t *testing.T) {
+	writeCodexModelConfig(t)
 	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
 	cases := []struct {
 		target string
@@ -456,7 +458,7 @@ func TestProvidersScanTextIncludesGrok(t *testing.T) {
 	}
 }
 
-func TestModelsListsRegistryAliases(t *testing.T) {
+func TestModelsListsConfigAndProvidersOnly(t *testing.T) {
 	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
 	home := t.TempDir()
 	t.Setenv("AI_DISPATCH_HOME", home)
@@ -482,9 +484,14 @@ func TestModelsListsRegistryAliases(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	for _, target := range []string{"mimo-pro", "mimo-openrouter-pro", "kimi"} {
+	for _, target := range []string{"mimo-pro", "codex", "cursor", "claude"} {
 		if !containsString(payload.Targets, target) {
 			t.Fatalf("missing %q in targets=%v", target, payload.Targets)
+		}
+	}
+	for _, target := range []string{"mimo-openrouter-pro", "kimi", "gpt5.5"} {
+		if containsString(payload.Targets, target) {
+			t.Fatalf("registry leftover %q still advertised: %v", target, payload.Targets)
 		}
 	}
 	if containsString(payload.Targets, "mimo") {
@@ -527,7 +534,7 @@ func TestFirstRunSetupSummary(t *testing.T) {
 	lastSetupResult = nil
 
 	var stdout, stderr bytes.Buffer
-	code := MainWithInput([]string{"send", "gpt5.5", "--json-result"}, &stdout, &stderr, strings.NewReader("hello"))
+	code := MainWithInput([]string{"send", "codex", "--json-result"}, &stdout, &stderr, strings.NewReader("hello"))
 	// Provider execution is disabled in tests, so send fails — but config
 	// setup and first-run injection should still occur.
 	if code == 0 {
@@ -593,12 +600,12 @@ func TestSecondRunNoSetup(t *testing.T) {
 	// First call triggers config setup + first-run hint.
 	lastSetupResult = nil
 	var stdout1, stderr1 bytes.Buffer
-	MainWithInput([]string{"send", "gpt5.5", "--json-result"}, &stdout1, &stderr1, strings.NewReader("hello"))
+	MainWithInput([]string{"send", "codex", "--json-result"}, &stdout1, &stderr1, strings.NewReader("hello"))
 
 	// Second call should not trigger setup or hint.
 	lastSetupResult = nil
 	var stdout2, stderr2 bytes.Buffer
-	MainWithInput([]string{"send", "gpt5.5", "--json-result"}, &stdout2, &stderr2, strings.NewReader("hello"))
+	MainWithInput([]string{"send", "codex", "--json-result"}, &stdout2, &stderr2, strings.NewReader("hello"))
 
 	stderrStr := stderr2.String()
 	for _, unwanted := range []string{"首次调用", "配置初始化完成", "Provider 探测"} {
@@ -632,7 +639,7 @@ func TestInitDoesNotQueueFirstRunHint(t *testing.T) {
 
 	lastSetupResult = nil
 	var stdout, stderr bytes.Buffer
-	MainWithInput([]string{"send", "gpt5.5", "--json-result"}, &stdout, &stderr, strings.NewReader("hello"))
+	MainWithInput([]string{"send", "codex", "--json-result"}, &stdout, &stderr, strings.NewReader("hello"))
 
 	var payload map[string]any
 	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
@@ -644,6 +651,23 @@ func TestInitDoesNotQueueFirstRunHint(t *testing.T) {
 	if strings.Contains(stderr.String(), "首次调用") {
 		t.Errorf("send after explicit init should not print first-use message: %s", stderr.String())
 	}
+}
+
+func writeCodexModelConfig(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("AI_DISPATCH_HOME", home)
+	path := filepath.Join(home, "config.json")
+	t.Setenv("AI_DISPATCH_CONFIG", path)
+	writeCLIConfig(t, path, `{
+  "version": 1,
+  "claude_transport": "print",
+  "models": {
+    "gpt5.5": [{"provider": "codex", "model": "gpt-5.5"}],
+    "gpt5.6-luna": [{"provider": "codex", "model": "gpt-5.6-luna"}]
+  },
+  "providers": {}
+}`)
 }
 
 func writeCLIConfig(t *testing.T, path string, data string) {

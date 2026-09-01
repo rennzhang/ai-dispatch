@@ -70,7 +70,7 @@ logs/
 - Runtime/tool/task failures are not hidden by fallback.
 - Provider adapters must select an incremental output mode when the CLI offers one. The shared inactivity timeout resets on every stdout/stderr write; it is not a wall-clock limit while the provider is still emitting events.
 - Claude defaults to `claude -p`; PTY is explicit config or provider option.
-- Model routing uses `config.json` `models` first, then the bundled registry, then provider inference.
+- Model routing uses config.json models only. Unknown short names fail closed. Bare provider targets use the provider CLI default.
 
 ## Feature Designs
 
