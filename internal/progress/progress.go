@@ -51,6 +51,26 @@ func (e *Emitter) Emit(kind contract.ProgressKind, name string, summary string) 
 	e.emit(event)
 }
 
+func (e *Emitter) EmitTerminal(ok bool, userFacingSummary string) {
+	if e == nil || e.Writer == nil {
+		return
+	}
+	kind := contract.ProgressDone
+	name := "done"
+	summary := "completed"
+	if !ok {
+		kind = contract.ProgressError
+		name = "error"
+		summary = "failed"
+	}
+	event := contract.NewProgress(kind, name, summary)
+	event.Provider = e.Provider
+	if strings.TrimSpace(userFacingSummary) != "" {
+		event.Directive = "TERMINAL -- paste user_facing_summary to the user unchanged.\n" + userFacingSummary
+	}
+	e.emit(event)
+}
+
 func (e *Emitter) Feed(chunk []byte) {
 	e.FeedStdout(chunk)
 }

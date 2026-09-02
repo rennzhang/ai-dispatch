@@ -204,6 +204,25 @@ func TestEmitterBoundsLargeHookChunkState(t *testing.T) {
 	}
 }
 
+func TestEmitTerminalIncludesUserFacingSummary(t *testing.T) {
+	var buf strings.Builder
+	emitter := NewEmitter("cursor", &buf)
+	summary := "**ai-dispatch 调用说明**\n实际调用：cursor / kimi-k3-high"
+	emitter.EmitTerminal(true, summary)
+	lines := parseLines(t, buf.String())
+	if len(lines) != 1 {
+		t.Fatalf("lines=%v", lines)
+	}
+	event := lines[0]
+	if event["kind"] != "done" || event["next_action"] != "done" {
+		t.Fatalf("event=%v", event)
+	}
+	directive, _ := event["directive"].(string)
+	if !strings.Contains(directive, "paste user_facing_summary") || !strings.Contains(directive, "实际调用：cursor / kimi-k3-high") {
+		t.Fatalf("directive=%q", directive)
+	}
+}
+
 func parseLines(t *testing.T, text string) []map[string]any {
 	t.Helper()
 	lines := []map[string]any{}

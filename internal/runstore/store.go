@@ -16,13 +16,14 @@ import (
 )
 
 type RunRecord struct {
-	RunID     string                   `json:"run_id"`
-	CreatedAt string                   `json:"created_at"`
-	TaskName  string                   `json:"task_name,omitempty"`
-	Target    string                   `json:"target,omitempty"`
-	Status    contract.Status          `json:"status,omitempty"`
-	Result    *contract.ProviderResult `json:"result,omitempty"`
-	Path      string                   `json:"path"`
+	RunID             string                   `json:"run_id"`
+	CreatedAt         string                   `json:"created_at"`
+	TaskName          string                   `json:"task_name,omitempty"`
+	Target            string                   `json:"target,omitempty"`
+	Status            contract.Status          `json:"status,omitempty"`
+	UserFacingSummary string                   `json:"user_facing_summary,omitempty"`
+	Result            *contract.ProviderResult `json:"result,omitempty"`
+	Path              string                   `json:"path"`
 }
 
 type ListFilter struct {
@@ -99,13 +100,14 @@ func WriteResultWithTask(root string, runID string, taskName string, result cont
 	}
 	defer os.RemoveAll(stagingDir)
 	record := RunRecord{
-		RunID:     runID,
-		CreatedAt: time.Now().Format(time.RFC3339),
-		TaskName:  taskName,
-		Target:    result.RequestedTarget,
-		Status:    result.Status,
-		Result:    &result,
-		Path:      dir,
+		RunID:             runID,
+		CreatedAt:         time.Now().Format(time.RFC3339),
+		TaskName:          taskName,
+		Target:            result.RequestedTarget,
+		Status:            result.Status,
+		UserFacingSummary: result.UserFacingSummary,
+		Result:            &result,
+		Path:              dir,
 	}
 	meta, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
@@ -243,6 +245,9 @@ func Read(root string, query string) (RunRecord, error) {
 	record.Target = record.Result.RequestedTarget
 	record.Status = record.Result.Status
 	record.Path = dir
+	if record.UserFacingSummary == "" {
+		record.UserFacingSummary = record.Result.UserFacingSummary
+	}
 	return record, nil
 }
 

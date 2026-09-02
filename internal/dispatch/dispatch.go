@@ -105,15 +105,12 @@ func completeDispatchResult(req contract.DispatchRequest, opts Options, result c
 			}
 		}
 	}
+	result = output.AttachUserFacing(result)
 	if !req.StreamProgress || opts.ProgressWriter == nil {
 		return result
 	}
 	emitter := progress.NewEmitter(result.ProviderUsed, opts.ProgressWriter)
-	if result.OK {
-		emitter.Emit(contract.ProgressDone, "done", "completed")
-	} else {
-		emitter.Emit(contract.ProgressError, "error", result.Stderr)
-	}
+	emitter.EmitTerminal(result.OK, result.UserFacingSummary)
 	return result
 }
 

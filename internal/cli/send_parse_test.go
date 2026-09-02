@@ -80,6 +80,97 @@ func TestStdinPromptIsAccepted(t *testing.T) {
 	}
 }
 
+func TestSendJSONResultPrintsUserFacingNoticeAndKeepsStdoutPure(t *testing.T) {
+	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"send", "codex", "hello", "--json-result"}, &stdout, &stderr)
+	if code != 3 {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if strings.Contains(stdout.String(), "把以上调用说明原样写进给用户的最终回复") {
+		t.Fatalf("stdout must stay pure JSON: %s", stdout.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	summary, _ := payload["user_facing_summary"].(string)
+	if !strings.Contains(summary, "**ai-dispatch 调用说明**") || !strings.Contains(summary, "实际调用：codex") {
+		t.Fatalf("payload=%v", payload)
+	}
+	if !strings.Contains(stderr.String(), summary) || !strings.Contains(stderr.String(), "把以上调用说明原样写进给用户的最终回复") {
+		t.Fatalf("stderr=%s", stderr.String())
+	}
+}
+
+func TestSendParseErrorJSONIncludesUserFacingSummary(t *testing.T) {
+	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"send", "codex", "--json-result"}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	summary, _ := payload["user_facing_summary"].(string)
+	if !strings.Contains(summary, "失败：输入错误") {
+		t.Fatalf("payload=%v", payload)
+	}
+	if !strings.Contains(stderr.String(), "**ai-dispatch 调用说明**") {
+		t.Fatalf("stderr=%s", stderr.String())
+	}
+}
+
+func TestModelsResolveJSONDoesNotPrintUserFacingNotice(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"models", "resolve", "not-a-real-model-xyz", "--format", "json"}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("expected resolve failure, stdout=%s", stdout.String())
+	}
+	if strings.Contains(stdout.String()+stderr.String(), "ai-dispatch 调用说明") {
+		t.Fatalf("models resolve should not print user-facing wrap-up: stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
+}
+
+func TestInvalidTimeoutWithJSONResultStillWritesJSON(t *testing.T) {
+	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"send", "codex", "hello", "--timeout", "nope", "--json-result"}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout should stay JSON: %v stdout=%s stderr=%s", err, stdout.String(), stderr.String())
+	}
+	summary, _ := payload["user_facing_summary"].(string)
+	if !strings.Contains(summary, "失败：输入错误") {
+		t.Fatalf("payload=%v", payload)
+	}
+}
+
+func TestStreamProgressDoesNotPrintPlaintextNotice(t *testing.T) {
+	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"send", "codex", "hello", "--json-result", "--stream-progress"}, &stdout, &stderr)
+	if code != 3 {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if strings.Contains(stderr.String(), "把以上调用说明原样写进给用户的最终回复") {
+		t.Fatalf("stream-progress stderr should stay NDJSON, got %s", stderr.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	summary, _ := payload["user_facing_summary"].(string)
+	if !strings.Contains(summary, "**ai-dispatch 调用说明**") {
+		t.Fatalf("payload=%v", payload)
+	}
+}
+
 func TestDefaultActivityTimeoutIsDisabledForAllProviders(t *testing.T) {
 	var stderr bytes.Buffer
 	req, _, err := parseSend("send", []string{"mimo-openrouter-pro", "hello"}, &stderr)

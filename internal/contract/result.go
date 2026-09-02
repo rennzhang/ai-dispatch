@@ -85,15 +85,18 @@ type ProviderResult struct {
 	SchemaVersion        string             `json:"schema_version"`
 	OK                   bool               `json:"ok"`
 	Status               Status             `json:"status"`
-	Text                 string             `json:"text,omitempty"`
+	UserFacingSummary    string             `json:"user_facing_summary,omitempty"`
 	ProviderUsed         string             `json:"provider_used"`
 	ModelUsed            string             `json:"model_used,omitempty"`
 	SessionID            string             `json:"session_id,omitempty"`
+	Degraded             bool               `json:"degraded"`
+	DegradeReason        string             `json:"degrade_reason,omitempty"`
+	DurationMS           int64              `json:"duration_ms"`
+	DurationText         string             `json:"duration_text,omitempty"`
+	Text                 string             `json:"text,omitempty"`
 	RequestedTarget      string             `json:"requested_target,omitempty"`
 	RouteTrace           []string           `json:"route_trace"`
 	RouteSteps           []RouteStep        `json:"route_steps"`
-	Degraded             bool               `json:"degraded"`
-	DegradeReason        string             `json:"degrade_reason,omitempty"`
 	RequestedEffort      Effort             `json:"requested_effort,omitempty"`
 	AppliedEffort        Effort             `json:"applied_effort,omitempty"`
 	EffortFallbackReason string             `json:"effort_fallback_reason,omitempty"`
@@ -103,7 +106,6 @@ type ProviderResult struct {
 	Usage                *UsageInfo         `json:"usage,omitempty"`
 	Cost                 *CostInfo          `json:"cost,omitempty"`
 	ExitCode             int                `json:"exit_code"`
-	DurationMS           int64              `json:"duration_ms"`
 	Stderr               string             `json:"stderr"`
 	Warnings             []string           `json:"warnings"`
 	OutputFile           string             `json:"output_file,omitempty"`

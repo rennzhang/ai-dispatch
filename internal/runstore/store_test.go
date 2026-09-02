@@ -129,6 +129,38 @@ func TestWriteResultWithTask(t *testing.T) {
 	}
 }
 
+func TestWriteResultPersistsUserFacingSummary(t *testing.T) {
+	root := t.TempDir()
+	result := contract.SuccessResult("hello")
+	result.RequestedTarget = "kimi"
+	result.ProviderUsed = "cursor"
+	result.ModelUsed = "kimi-k3-high"
+	result.UserFacingSummary = "**ai-dispatch 调用说明**\n实际调用：cursor / kimi-k3-high"
+	if err := WriteResult(root, "run-summary", result); err != nil {
+		t.Fatal(err)
+	}
+	record, err := Read(root, "run-summary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.UserFacingSummary != result.UserFacingSummary {
+		t.Fatalf("top-level summary=%q", record.UserFacingSummary)
+	}
+	if record.Result == nil || record.Result.UserFacingSummary != result.UserFacingSummary {
+		t.Fatalf("result summary=%+v", record.Result)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "run-summary", "run.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := string(raw)
+	topLevel := strings.Index(encoded, "\"user_facing_summary\"")
+	resultAt := strings.Index(encoded, "\"result\"")
+	if topLevel < 0 || resultAt < 0 || topLevel > resultAt {
+		t.Fatalf("run.json should expose user_facing_summary before result: %s", encoded)
+	}
+}
+
 func TestFindBySessionID(t *testing.T) {
 	root := t.TempDir()
 	result := contract.SuccessResult("hello")

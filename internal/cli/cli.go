@@ -12,6 +12,7 @@ import (
 	"github.com/rennzhang/ai-dispatch/internal/config"
 	"github.com/rennzhang/ai-dispatch/internal/contract"
 	"github.com/rennzhang/ai-dispatch/internal/dispatch"
+	"github.com/rennzhang/ai-dispatch/internal/output"
 	"github.com/rennzhang/ai-dispatch/internal/providers/antigravity"
 	"github.com/rennzhang/ai-dispatch/internal/providers/claude"
 	"github.com/rennzhang/ai-dispatch/internal/runstore"
@@ -187,16 +188,16 @@ func send(argv []string, stdout io.Writer, stderr io.Writer, stdin io.Reader) in
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
-		return emitCLIError(stdout, stderr, jsonResult, err.Error(), 2)
+		return emitDispatchError(stdout, stderr, jsonResult, err.Error(), 2, contract.FailureInput)
 	}
 	if req.Target == "" {
-		return emitCLIError(stdout, stderr, jsonResult, "target is required", 2)
+		return emitDispatchError(stdout, stderr, jsonResult, "target is required", 2, contract.FailureInput)
 	}
 	if err := prepareRequest(&req, stdin); err != nil {
-		return emitCLIError(stdout, stderr, jsonResult, err.Error(), 2)
+		return emitDispatchError(stdout, stderr, jsonResult, err.Error(), 2, contract.FailureInput)
 	}
 	if strings.TrimSpace(req.Prompt) == "" && req.PromptFile == "" {
-		return emitCLIError(stdout, stderr, jsonResult, "Either prompt, --prompt-file, or stdin input is required", 2)
+		return emitDispatchError(stdout, stderr, jsonResult, "Either prompt, --prompt-file, or stdin input is required", 2, contract.FailureInput)
 	}
 	if code, ok := ensureExecutionSetup(jsonResult, stdout, stderr); !ok {
 		return code
@@ -222,16 +223,16 @@ func resume(argv []string, stdout io.Writer, stderr io.Writer, stdin io.Reader) 
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
-		return emitCLIError(stdout, stderr, jsonResult, err.Error(), 2)
+		return emitDispatchError(stdout, stderr, jsonResult, err.Error(), 2, contract.FailureInput)
 	}
 	if req.SessionID == "" {
-		return emitCLIError(stdout, stderr, jsonResult, "--session-id is required", 2)
+		return emitDispatchError(stdout, stderr, jsonResult, "--session-id is required", 2, contract.FailureInput)
 	}
 	if err := prepareRequest(&req, stdin); err != nil {
-		return emitCLIError(stdout, stderr, jsonResult, err.Error(), 2)
+		return emitDispatchError(stdout, stderr, jsonResult, err.Error(), 2, contract.FailureInput)
 	}
 	if strings.TrimSpace(req.Prompt) == "" && req.PromptFile == "" {
-		return emitCLIError(stdout, stderr, jsonResult, "Either prompt, --prompt-file, or stdin input is required", 2)
+		return emitDispatchError(stdout, stderr, jsonResult, "Either prompt, --prompt-file, or stdin input is required", 2, contract.FailureInput)
 	}
 	if code, ok := ensureExecutionSetup(jsonResult, stdout, stderr); !ok {
 		return code
@@ -258,7 +259,7 @@ func ensureExecutionSetup(jsonResult bool, stdout io.Writer, stderr io.Writer) (
 	}
 	br, err := setup.Ensure()
 	if err != nil {
-		return emitCLIError(stdout, stderr, jsonResult, fmt.Sprintf("config setup failed: %v", err), 1), false
+		return emitDispatchError(stdout, stderr, jsonResult, fmt.Sprintf("config setup failed: %v", err), 1, contract.FailureConfig), false
 	}
 	if br.Summary != nil {
 		printSetupSummary(stderr, br.Summary)
@@ -332,8 +333,12 @@ func injectFirstRun(result contract.ProviderResult, jsonResult bool, stderr io.W
 
 func finalizeAndPersistResult(req contract.DispatchRequest, result contract.ProviderResult, jsonResult bool, stderr io.Writer) contract.ProviderResult {
 	result = injectFirstRun(result, jsonResult, stderr)
+	result = output.AttachUserFacing(result)
 	if err := runstore.WriteResultWithTask("", "", req.TaskName, result); err != nil {
 		result.Warnings = append(result.Warnings, "runstore write failed: "+err.Error())
+	}
+	if !req.StreamProgress {
+		output.WriteUserFacingNotice(stderr, result)
 	}
 	return result
 }
@@ -438,7 +443,7 @@ func parseSend(command string, argv []string, stderr io.Writer) (contract.Dispat
 	providerOpts := multiFlag{}
 	fs.Var(&providerOpts, "provider-opt", "provider option, e.g. claude.transport=print|pty|auto")
 	if err := fs.Parse(argv); err != nil {
-		return contract.DispatchRequest{}, false, err
+		return contract.DispatchRequest{}, jsonRequested, err
 	}
 	args := fs.Args()
 	req := contract.DispatchRequest{
@@ -657,6 +662,20 @@ func validProviderOpt(provider string, key string) bool {
 func emitCLIError(stdout io.Writer, stderr io.Writer, jsonResult bool, message string, exitCode int) int {
 	if jsonResult {
 		result := contract.ErrorResult(contract.StatusError, contract.FailureInput, message, exitCode)
+		return writeProviderResult(stdout, result)
+	}
+	fmt.Fprintln(stderr, "ai-dispatch: error:", message)
+	return exitCode
+}
+
+func emitDispatchError(stdout io.Writer, stderr io.Writer, jsonResult bool, message string, exitCode int, failure contract.FailureClass) int {
+	if failure == "" {
+		failure = contract.FailureInput
+	}
+	result := contract.ErrorResult(contract.StatusError, failure, message, exitCode)
+	result = output.AttachUserFacing(result)
+	output.WriteUserFacingNotice(stderr, result)
+	if jsonResult {
 		return writeProviderResult(stdout, result)
 	}
 	fmt.Fprintln(stderr, "ai-dispatch: error:", message)

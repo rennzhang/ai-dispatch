@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.7.1
+
+- Emit a ready-to-paste `user_facing_summary` and `duration_text` (`hh:mm:ss`) at send/resume wrap-up. Calling agents should copy the summary verbatim instead of reconstructing provider/model/duration.
+- Keep `duration_ms` as the machine field. Put user-facing identity fields before `text` in JSON, and expose `user_facing_summary` at the top level of `run.json`.
+- Print the same summary as plaintext on stderr unless `--stream-progress` is set. With stream-progress, keep stderr as NDJSON and attach the summary to the terminal progress event.
+- Include the wrap-up on send/resume input and config errors; leave models/config/doctor JSON errors unchanged.
+- Label config setup failures as config errors, not input errors. Preserve `--json-result` when flag parsing fails.
+
 ## v0.7.0
 
 - Remove the bundled model registry. Executable short names now come only from ~/.ai-dispatch/config.json.
