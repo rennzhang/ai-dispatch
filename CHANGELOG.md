@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.7.2
+
+- Publish the npm package from the Release workflow with trusted publishing after GitHub Release assets exist. Homebrew tap updates stay manual.
+
 ## v0.7.1
 
 - Emit a ready-to-paste `user_facing_summary` and `duration_text` (`hh:mm:ss`) at send/resume wrap-up. Calling agents should copy the summary verbatim instead of reconstructing provider/model/duration.

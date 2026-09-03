@@ -4,12 +4,31 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: tag
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          else
+            tag="$(tr -d '[:space:]' < skills/ai-dispatch/VERSION)"
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "Using tag ${tag}"
+
   delivery-gate:
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
@@ -28,7 +47,7 @@ jobs:
         run: scripts/quality_gate.sh
 
   build:
-    needs: delivery-gate
+    needs: [prepare, delivery-gate]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,7 +60,7 @@ jobs:
           node-version: "22"
       - name: Build tarballs
         run: |
-          tag="${GITHUB_REF#refs/tags/}"
+          tag="${{ needs.prepare.outputs.tag }}"
           scripts/release.sh "$tag"
           scripts/check-homebrew-formula.sh
       - uses: actions/upload-artifact@v4
@@ -54,7 +73,7 @@ jobs:
             dist/ai-dispatch.rb
 
   release:
-    needs: build
+    needs: [prepare, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -62,11 +81,32 @@ jobs:
         with:
           name: release-dist
           path: dist
-      - name: Create release and upload assets
+      - name: Create GitHub Release if needed
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tag="${GITHUB_REF#refs/tags/}"
-          gh release create "$tag" dist/*.tar.gz dist/*.bin dist/SHA256SUMS dist/ai-dispatch.rb \
-            --title "$tag" \
-            --generate-notes
+          set -euo pipefail
+          tag="${{ needs.prepare.outputs.tag }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "GitHub Release $tag already exists"
+          else
+            gh release create "$tag" dist/*.tar.gz dist/*.bin dist/SHA256SUMS dist/ai-dispatch.rb --title "$tag" --generate-notes
+          fi
+
+  npm:
+    needs: [prepare, release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+      - name: Publish npm package
+        run: |
+          set -euo pipefail
+          npm --version
+          npm publish ./npm/ai-dispatch --access public

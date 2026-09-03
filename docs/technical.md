@@ -370,19 +370,16 @@ git push origin main
 git push origin vX.Y.Z
 ```
 
-发版后用 release 页面或 `gh release view vX.Y.Z` 确认四个平台包和 `SHA256SUMS` 都已上传。
+`scripts/release.sh` 会拒绝 npm 包版本与 `skills/ai-dispatch/VERSION` 不一致的构建，并生成 `dist/ai-dispatch.rb`。
 
-GitHub Release 完成后，再发布同版本 npm 包和 Homebrew tap 公式：
+GitHub Release 完成后，同一条 Release workflow 会用 npm trusted publishing 自动发布同版本 npm 包，不再需要本机 OTP。确认：
 
 ```bash
-cd npm/ai-dispatch
-npm test
-npm pack --dry-run
-cd ../..
-npm publish ./npm/ai-dispatch
+gh release view vX.Y.Z
+npm view ai-dispatch version --registry https://registry.npmjs.org
 ```
 
-`scripts/release.sh` 会拒绝 npm 包版本与 `skills/ai-dispatch/VERSION` 不一致的构建，并生成 `dist/ai-dispatch.rb`。将它复制到 `rennzhang/homebrew-tap` 的 `Formula/ai-dispatch.rb` 后提交推送。npm publish 与 tap 更新都保持人工显式执行，避免 tag 推送自动向外发布。
+Homebrew tap 仍需人工更新：把 `dist/ai-dispatch.rb` 复制到 `rennzhang/homebrew-tap` 的 `Formula/ai-dispatch.rb` 后提交推送。
 
 release 构建默认拒绝任何 tracked、staged 或 untracked 改动，避免生成带正式版本名的 dirty 包。只有本地验收时可以显式使用 `AI_DISPATCH_ALLOW_DIRTY_LOCAL=1 scripts/release.sh`；这类产物会保留 dirty identity，不能发布。
 
