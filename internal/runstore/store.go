@@ -21,6 +21,7 @@ type RunRecord struct {
 	TaskName          string                   `json:"task_name,omitempty"`
 	Target            string                   `json:"target,omitempty"`
 	Status            contract.Status          `json:"status,omitempty"`
+	AgentHint         string                   `json:"agent_hint,omitempty"`
 	UserFacingSummary string                   `json:"user_facing_summary,omitempty"`
 	Result            *contract.ProviderResult `json:"result,omitempty"`
 	Path              string                   `json:"path"`
@@ -105,6 +106,7 @@ func WriteResultWithTask(root string, runID string, taskName string, result cont
 		TaskName:          taskName,
 		Target:            result.RequestedTarget,
 		Status:            result.Status,
+		AgentHint:         result.AgentHint,
 		UserFacingSummary: result.UserFacingSummary,
 		Result:            &result,
 		Path:              dir,
@@ -247,6 +249,9 @@ func Read(root string, query string) (RunRecord, error) {
 	record.Path = dir
 	if record.UserFacingSummary == "" {
 		record.UserFacingSummary = record.Result.UserFacingSummary
+	}
+	if record.AgentHint == "" {
+		record.AgentHint = record.Result.AgentHint
 	}
 	return record, nil
 }

@@ -51,7 +51,7 @@ func (e *Emitter) Emit(kind contract.ProgressKind, name string, summary string) 
 	e.emit(event)
 }
 
-func (e *Emitter) EmitTerminal(ok bool, userFacingSummary string) {
+func (e *Emitter) EmitTerminal(ok bool, agentHint string, userFacingSummary string) {
 	if e == nil || e.Writer == nil {
 		return
 	}
@@ -66,7 +66,11 @@ func (e *Emitter) EmitTerminal(ok bool, userFacingSummary string) {
 	event := contract.NewProgress(kind, name, summary)
 	event.Provider = e.Provider
 	if strings.TrimSpace(userFacingSummary) != "" {
-		event.Directive = "TERMINAL -- paste user_facing_summary to the user unchanged.\n" + userFacingSummary
+		directive := strings.TrimSpace(agentHint)
+		if directive == "" {
+			directive = "You MUST paste the dispatch result user_facing_summary into the final reply to the user verbatim!"
+		}
+		event.Directive = "TERMINAL -- " + directive + "\n" + userFacingSummary
 	}
 	e.emit(event)
 }

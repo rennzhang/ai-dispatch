@@ -9,13 +9,16 @@ import (
 )
 
 const (
-	userFacingTitle = "**ai-dispatch 调用说明**"
-	userFacingHint  = "把以上调用说明原样写进给用户的最终回复，不要改写。"
+	userFacingTitle = "**ai-dispatch Result**"
+	agentHint       = "You MUST paste the dispatch result user_facing_summary into the final reply to the user verbatim!"
 )
 
 func AttachUserFacing(result contract.ProviderResult) contract.ProviderResult {
 	result.DurationText = FormatDurationText(result.DurationMS)
 	result.UserFacingSummary = RenderUserFacingSummary(result)
+	if result.UserFacingSummary != "" {
+		result.AgentHint = agentHint
+	}
 	return result
 }
 
@@ -42,7 +45,7 @@ func RenderUserFacingSummary(result contract.ProviderResult) string {
 		lines = append(lines, "失败："+failureLabel(result))
 	}
 	if includeDuration(result) {
-		lines = append(lines, "耗时："+FormatDurationText(result.DurationMS))
+		lines = append(lines, "Duration："+FormatDurationText(result.DurationMS))
 	}
 	if sessionID := strings.TrimSpace(result.SessionID); sessionID != "" {
 		lines = append(lines, "Session ID: "+sessionID)
@@ -62,7 +65,7 @@ func WriteUserFacingNotice(w io.Writer, result contract.ProviderResult) {
 		return
 	}
 	fmt.Fprintln(w, summary)
-	fmt.Fprintln(w, userFacingHint)
+	fmt.Fprintln(w, agentHint)
 }
 
 func actualCallLine(result contract.ProviderResult) string {
@@ -70,11 +73,11 @@ func actualCallLine(result contract.ProviderResult) string {
 	model := strings.TrimSpace(result.ModelUsed)
 	switch {
 	case provider != "" && model != "":
-		return "实际调用：" + provider + " / " + model
+		return "Target：" + provider + " / " + model
 	case provider != "":
-		return "实际调用：" + provider
+		return "Target：" + provider
 	case model != "":
-		return "实际调用：" + model
+		return "Target：" + model
 	default:
 		return ""
 	}

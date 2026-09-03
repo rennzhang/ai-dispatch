@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.7.3
+
+- Rename the wrap-up block to `**ai-dispatch Result**` with `Target` and `Duration` labels.
+- Add JSON `agent_hint`: `You MUST paste the dispatch result user_facing_summary into the final reply to the user verbatim!`
+
 ## v0.7.2
 
 - Publish the npm package from the Release workflow with trusted publishing after GitHub Release assets exist. Homebrew tap updates stay manual.

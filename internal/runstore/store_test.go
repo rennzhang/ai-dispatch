@@ -135,7 +135,7 @@ func TestWriteResultPersistsUserFacingSummary(t *testing.T) {
 	result.RequestedTarget = "kimi"
 	result.ProviderUsed = "cursor"
 	result.ModelUsed = "kimi-k3-high"
-	result.UserFacingSummary = "**ai-dispatch 调用说明**\n实际调用：cursor / kimi-k3-high"
+	result.UserFacingSummary = "**ai-dispatch Result**\nTarget：cursor / kimi-k3-high"
 	if err := WriteResult(root, "run-summary", result); err != nil {
 		t.Fatal(err)
 	}

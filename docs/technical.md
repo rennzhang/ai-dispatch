@@ -153,6 +153,7 @@ ai-dispatch send gpt5.6-luna "implement the fix" --fast --json-result
 
 调用方不要根据请求 target 推断真实结果。给用户看的默认内容是 `user_facing_summary`，必须原样粘贴，不要自己拼或重算耗时。
 
+- `agent_hint`
 - `user_facing_summary`
 - `duration_text`
 - `ok`
@@ -173,7 +174,7 @@ ai-dispatch send gpt5.6-luna "implement the fix" --fast --json-result
 - `session_id`
 - `failure_class`
 
-`user_facing_summary` 由 CLI 收口时写好：实际调用、降级（若有）、失败（若有）、耗时（`hh:mm:ss`，同 `duration_text`）和 Session ID（若有）。未使用 `--stream-progress` 时 stderr 再打同一块纯文本；使用 `--stream-progress` 时 stderr 保持 NDJSON，摘要在 JSON 和 terminal progress 事件里。`duration_ms` 仍是毫秒，给程序用。`session_id` 可用于后续 `resume`。`degraded=true` 表示 ai-dispatch 已按路由策略换过候选。effort fallback 和 fast capability fallback 都与路由降级独立。
+`user_facing_summary` 由 CLI 收口时写好：Target、降级（若有）、失败（若有）、Duration（`hh:mm:ss`，同 `duration_text`）和 Session ID（若有）。未使用 `--stream-progress` 时 stderr 再打同一块纯文本；使用 `--stream-progress` 时 stderr 保持 NDJSON，摘要在 JSON 和 terminal progress 事件里。`duration_ms` 仍是毫秒，给程序用。`session_id` 可用于后续 `resume`。`degraded=true` 表示 ai-dispatch 已按路由策略换过候选。effort fallback 和 fast capability fallback 都与路由降级独立。
 
 ## 模型路由
 

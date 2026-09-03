@@ -110,7 +110,7 @@ func completeDispatchResult(req contract.DispatchRequest, opts Options, result c
 		return result
 	}
 	emitter := progress.NewEmitter(result.ProviderUsed, opts.ProgressWriter)
-	emitter.EmitTerminal(result.OK, result.UserFacingSummary)
+	emitter.EmitTerminal(result.OK, result.AgentHint, result.UserFacingSummary)
 	return result
 }
 

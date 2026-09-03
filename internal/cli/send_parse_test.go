@@ -87,18 +87,19 @@ func TestSendJSONResultPrintsUserFacingNoticeAndKeepsStdoutPure(t *testing.T) {
 	if code != 3 {
 		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
-	if strings.Contains(stdout.String(), "把以上调用说明原样写进给用户的最终回复") {
-		t.Fatalf("stdout must stay pure JSON: %s", stdout.String())
-	}
 	var payload map[string]any
 	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
 	summary, _ := payload["user_facing_summary"].(string)
-	if !strings.Contains(summary, "**ai-dispatch 调用说明**") || !strings.Contains(summary, "实际调用：codex") {
+	if !strings.Contains(summary, "**ai-dispatch Result**") || !strings.Contains(summary, "Target：codex") {
 		t.Fatalf("payload=%v", payload)
 	}
-	if !strings.Contains(stderr.String(), summary) || !strings.Contains(stderr.String(), "把以上调用说明原样写进给用户的最终回复") {
+	hint, _ := payload["agent_hint"].(string)
+	if !strings.Contains(hint, "You MUST paste the dispatch result user_facing_summary") {
+		t.Fatalf("missing agent_hint: %v", payload)
+	}
+	if !strings.Contains(stderr.String(), summary) || !strings.Contains(stderr.String(), "You MUST paste the dispatch result user_facing_summary into the final reply to the user verbatim") {
 		t.Fatalf("stderr=%s", stderr.String())
 	}
 }
@@ -118,7 +119,7 @@ func TestSendParseErrorJSONIncludesUserFacingSummary(t *testing.T) {
 	if !strings.Contains(summary, "失败：输入错误") {
 		t.Fatalf("payload=%v", payload)
 	}
-	if !strings.Contains(stderr.String(), "**ai-dispatch 调用说明**") {
+	if !strings.Contains(stderr.String(), "**ai-dispatch Result**") {
 		t.Fatalf("stderr=%s", stderr.String())
 	}
 }
@@ -129,7 +130,7 @@ func TestModelsResolveJSONDoesNotPrintUserFacingNotice(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("expected resolve failure, stdout=%s", stdout.String())
 	}
-	if strings.Contains(stdout.String()+stderr.String(), "ai-dispatch 调用说明") {
+	if strings.Contains(stdout.String()+stderr.String(), "ai-dispatch Result") {
 		t.Fatalf("models resolve should not print user-facing wrap-up: stdout=%s stderr=%s", stdout.String(), stderr.String())
 	}
 }
@@ -158,15 +159,21 @@ func TestStreamProgressDoesNotPrintPlaintextNotice(t *testing.T) {
 	if code != 3 {
 		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
-	if strings.Contains(stderr.String(), "把以上调用说明原样写进给用户的最终回复") {
-		t.Fatalf("stream-progress stderr should stay NDJSON, got %s", stderr.String())
+	for _, line := range strings.Split(strings.TrimSpace(stderr.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var event map[string]any
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("stream-progress stderr should stay NDJSON, got %s", stderr.String())
+		}
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
 	summary, _ := payload["user_facing_summary"].(string)
-	if !strings.Contains(summary, "**ai-dispatch 调用说明**") {
+	if !strings.Contains(summary, "**ai-dispatch Result**") {
 		t.Fatalf("payload=%v", payload)
 	}
 }

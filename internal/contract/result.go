@@ -85,6 +85,7 @@ type ProviderResult struct {
 	SchemaVersion        string             `json:"schema_version"`
 	OK                   bool               `json:"ok"`
 	Status               Status             `json:"status"`
+	AgentHint            string             `json:"agent_hint,omitempty"`
 	UserFacingSummary    string             `json:"user_facing_summary,omitempty"`
 	ProviderUsed         string             `json:"provider_used"`
 	ModelUsed            string             `json:"model_used,omitempty"`

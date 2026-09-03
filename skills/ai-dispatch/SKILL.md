@@ -76,9 +76,9 @@ scripts/ai-dispatch resume --session-id <id> "<delta>" \
 
 ## 读结果
 
-返回 JSON 才是真相。给用户的最终回复必须原样贴上 `user_facing_summary`，不要改写、不要节选、不要自己重算耗时或猜测模型。
+返回 JSON 才是真相。JSON 里 `agent_hint` 是给模型的强制指令，不要贴给用户。给用户的最终回复必须原样贴上 `user_facing_summary`，不要改写、不要节选、不要自己重算耗时或猜测模型。
 
-这块由 CLI 在收口时写好，包括实际调用、降级（若有）、失败（若有）、耗时（`hh:mm:ss`）和 Session ID（若有）。未使用 `--stream-progress` 时 stderr 再打同一块纯文本；使用 `--stream-progress` 时 stderr 保持 NDJSON，摘要在 JSON 和 terminal progress 事件里。
+这块由 CLI 在收口时写好，包括 Target、降级（若有）、失败（若有）、Duration（`hh:mm:ss`）和 Session ID（若有）。未使用 `--stream-progress` 时 stderr 再打同一块纯文本；使用 `--stream-progress` 时 stderr 保持 NDJSON，摘要在 JSON 和 terminal progress 事件里。
 
 不要根据请求 target 猜真实执行结果。不要在调用方自己实现 fallback。排障仍可读 JSON 里的 `provider_used`、`model_used`、`degraded`、`session_id`、`failure_class` 等字段，但那些不是给用户看的默认内容。`degraded` 只表示路由降级；effort 回退看 `requested_effort`/`applied_effort`，fast 是否生效看 `requested_fast`/`applied_fast`。
 

@@ -40,9 +40,9 @@ func TestRenderUserFacingSummarySuccess(t *testing.T) {
 	}
 	got := RenderUserFacingSummary(result)
 	want := strings.Join([]string{
-		"**ai-dispatch 调用说明**",
-		"实际调用：cursor / kimi-k3-high",
-		"耗时：00:04:49",
+		"**ai-dispatch Result**",
+		"Target：cursor / kimi-k3-high",
+		"Duration：00:04:49",
 		"Session ID: d42b2733-9e2f-44a9-9dc8-47bcd4f044f7",
 	}, "\n")
 	if got != want {
@@ -70,10 +70,10 @@ func TestRenderUserFacingSummaryDegraded(t *testing.T) {
 	}
 	got := RenderUserFacingSummary(result)
 	want := strings.Join([]string{
-		"**ai-dispatch 调用说明**",
-		"实际调用：cursor / claude-fable-5-thinking-high",
+		"**ai-dispatch Result**",
+		"Target：cursor / claude-fable-5-thinking-high",
 		"降级：claude / claude-fable-5 失败，已切换到 cursor",
-		"耗时：00:09:44",
+		"Duration：00:09:44",
 		"Session ID: 4acd848e-518d-4595-8bee-c7a7f9352f08",
 	}, "\n")
 	if got != want {
@@ -93,10 +93,10 @@ func TestRenderUserFacingSummaryFailure(t *testing.T) {
 	}
 	got := RenderUserFacingSummary(result)
 	want := strings.Join([]string{
-		"**ai-dispatch 调用说明**",
-		"实际调用：cursor / kimi-k3-high",
+		"**ai-dispatch Result**",
+		"Target：cursor / kimi-k3-high",
 		"失败：配置错误",
-		"耗时：00:00:12",
+		"Duration：00:00:12",
 	}, "\n")
 	if got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
@@ -130,7 +130,7 @@ func TestRenderUserFacingSummaryInputErrorOmitsEmptyFields(t *testing.T) {
 	result := contract.ErrorResult(contract.StatusError, failure, "unsupported target: mimo-pro", 2)
 	got := RenderUserFacingSummary(result)
 	want := strings.Join([]string{
-		"**ai-dispatch 调用说明**",
+		"**ai-dispatch Result**",
 		"失败：输入错误",
 	}, "\n")
 	if got != want {
@@ -155,6 +155,7 @@ func TestAttachUserFacingJSONKeyOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded := string(raw)
+	hintAt := strings.Index(encoded, `"agent_hint"`)
 	summaryAt := strings.Index(encoded, `"user_facing_summary"`)
 	providerAt := strings.Index(encoded, `"provider_used"`)
 	modelAt := strings.Index(encoded, `"model_used"`)
@@ -162,11 +163,14 @@ func TestAttachUserFacingJSONKeyOrder(t *testing.T) {
 	degradedAt := strings.Index(encoded, `"degraded"`)
 	durationTextAt := strings.Index(encoded, `"duration_text"`)
 	textAt := strings.Index(encoded, `"text"`)
-	if summaryAt < 0 || providerAt < 0 || modelAt < 0 || sessionAt < 0 || degradedAt < 0 || durationTextAt < 0 || textAt < 0 {
+	if hintAt < 0 || summaryAt < 0 || providerAt < 0 || modelAt < 0 || sessionAt < 0 || degradedAt < 0 || durationTextAt < 0 || textAt < 0 {
 		t.Fatalf("missing keys in %s", encoded)
 	}
-	if !(summaryAt < providerAt && providerAt < modelAt && modelAt < sessionAt && sessionAt < degradedAt && degradedAt < durationTextAt && durationTextAt < textAt) {
+	if !(hintAt < summaryAt && summaryAt < providerAt && providerAt < modelAt && modelAt < sessionAt && sessionAt < degradedAt && degradedAt < durationTextAt && durationTextAt < textAt) {
 		t.Fatalf("key order is wrong: %s", encoded)
+	}
+	if result.AgentHint == "" || strings.Contains(result.UserFacingSummary, "You MUST paste") {
+		t.Fatalf("hint=%q summary=%q", result.AgentHint, result.UserFacingSummary)
 	}
 }
 
@@ -184,7 +188,7 @@ func TestWriteUserFacingNotice(t *testing.T) {
 	if !strings.Contains(got, result.UserFacingSummary) {
 		t.Fatalf("missing summary:\n%s", got)
 	}
-	if !strings.Contains(got, "把以上调用说明原样写进给用户的最终回复，不要改写。") {
+	if !strings.Contains(got, "You MUST paste the dispatch result user_facing_summary into the final reply to the user verbatim!") {
 		t.Fatalf("missing hint:\n%s", got)
 	}
 }
