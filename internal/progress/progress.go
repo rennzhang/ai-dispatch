@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/rennzhang/ai-dispatch/internal/contract"
+	"github.com/rennzhang/ai-dispatch/internal/output"
 )
 
 const (
@@ -68,7 +69,7 @@ func (e *Emitter) EmitTerminal(ok bool, agentHint string, userFacingSummary stri
 	if strings.TrimSpace(userFacingSummary) != "" {
 		directive := strings.TrimSpace(agentHint)
 		if directive == "" {
-			directive = "You MUST paste the dispatch result user_facing_summary into the final reply to the user verbatim!"
+			directive = output.AgentHint
 		}
 		event.Directive = "TERMINAL -- " + directive + "\n" + userFacingSummary
 	}

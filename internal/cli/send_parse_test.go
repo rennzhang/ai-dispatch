@@ -67,7 +67,7 @@ func TestPromptFileCanExceedInlinePromptLimit(t *testing.T) {
 func TestStdinPromptIsAccepted(t *testing.T) {
 	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
 	var stdout, stderr bytes.Buffer
-	code := MainWithInput([]string{"send", "codex", "--json-result"}, &stdout, &stderr, strings.NewReader("hello from stdin"))
+	code := MainWithInput([]string{"send", "codex", "--json-result", "--wrap-up"}, &stdout, &stderr, strings.NewReader("hello from stdin"))
 	if code != 3 {
 		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -82,8 +82,9 @@ func TestStdinPromptIsAccepted(t *testing.T) {
 
 func TestSendJSONResultPrintsUserFacingNoticeAndKeepsStdoutPure(t *testing.T) {
 	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	t.Setenv("AI_DISPATCH_CONFIG", filepath.Join(t.TempDir(), "missing-config.json"))
 	var stdout, stderr bytes.Buffer
-	code := Main([]string{"send", "codex", "hello", "--json-result"}, &stdout, &stderr)
+	code := Main([]string{"send", "codex", "hello", "--json-result", "--wrap-up"}, &stdout, &stderr)
 	if code != 3 {
 		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -92,7 +93,7 @@ func TestSendJSONResultPrintsUserFacingNoticeAndKeepsStdoutPure(t *testing.T) {
 		t.Fatal(err)
 	}
 	summary, _ := payload["user_facing_summary"].(string)
-	if !strings.Contains(summary, "**ai-dispatch Result**") || !strings.Contains(summary, "Target：codex") {
+	if !strings.Contains(summary, "[ai-dispatch") || !strings.Contains(summary, "codex") {
 		t.Fatalf("payload=%v", payload)
 	}
 	hint, _ := payload["agent_hint"].(string)
@@ -107,7 +108,7 @@ func TestSendJSONResultPrintsUserFacingNoticeAndKeepsStdoutPure(t *testing.T) {
 func TestSendParseErrorJSONIncludesUserFacingSummary(t *testing.T) {
 	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
 	var stdout, stderr bytes.Buffer
-	code := Main([]string{"send", "codex", "--json-result"}, &stdout, &stderr)
+	code := Main([]string{"send", "codex", "--json-result", "--wrap-up"}, &stdout, &stderr)
 	if code != 2 {
 		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -116,10 +117,10 @@ func TestSendParseErrorJSONIncludesUserFacingSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	summary, _ := payload["user_facing_summary"].(string)
-	if !strings.Contains(summary, "失败：输入错误") {
+	if !strings.Contains(summary, "Failed: input error") {
 		t.Fatalf("payload=%v", payload)
 	}
-	if !strings.Contains(stderr.String(), "**ai-dispatch Result**") {
+	if !strings.Contains(stderr.String(), "ai-dispatch") {
 		t.Fatalf("stderr=%s", stderr.String())
 	}
 }
@@ -130,7 +131,7 @@ func TestModelsResolveJSONDoesNotPrintUserFacingNotice(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("expected resolve failure, stdout=%s", stdout.String())
 	}
-	if strings.Contains(stdout.String()+stderr.String(), "ai-dispatch Result") {
+	if strings.Contains(stdout.String()+stderr.String(), "[ai-dispatch") {
 		t.Fatalf("models resolve should not print user-facing wrap-up: stdout=%s stderr=%s", stdout.String(), stderr.String())
 	}
 }
@@ -138,7 +139,7 @@ func TestModelsResolveJSONDoesNotPrintUserFacingNotice(t *testing.T) {
 func TestInvalidTimeoutWithJSONResultStillWritesJSON(t *testing.T) {
 	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
 	var stdout, stderr bytes.Buffer
-	code := Main([]string{"send", "codex", "hello", "--timeout", "nope", "--json-result"}, &stdout, &stderr)
+	code := Main([]string{"send", "codex", "hello", "--timeout", "nope", "--json-result", "--wrap-up"}, &stdout, &stderr)
 	if code != 2 {
 		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -147,7 +148,7 @@ func TestInvalidTimeoutWithJSONResultStillWritesJSON(t *testing.T) {
 		t.Fatalf("stdout should stay JSON: %v stdout=%s stderr=%s", err, stdout.String(), stderr.String())
 	}
 	summary, _ := payload["user_facing_summary"].(string)
-	if !strings.Contains(summary, "失败：输入错误") {
+	if !strings.Contains(summary, "Failed: input error") {
 		t.Fatalf("payload=%v", payload)
 	}
 }
@@ -155,7 +156,7 @@ func TestInvalidTimeoutWithJSONResultStillWritesJSON(t *testing.T) {
 func TestStreamProgressDoesNotPrintPlaintextNotice(t *testing.T) {
 	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
 	var stdout, stderr bytes.Buffer
-	code := Main([]string{"send", "codex", "hello", "--json-result", "--stream-progress"}, &stdout, &stderr)
+	code := Main([]string{"send", "codex", "hello", "--json-result", "--stream-progress", "--wrap-up"}, &stdout, &stderr)
 	if code != 3 {
 		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -173,7 +174,7 @@ func TestStreamProgressDoesNotPrintPlaintextNotice(t *testing.T) {
 		t.Fatal(err)
 	}
 	summary, _ := payload["user_facing_summary"].(string)
-	if !strings.Contains(summary, "**ai-dispatch Result**") {
+	if !strings.Contains(summary, "[ai-dispatch") {
 		t.Fatalf("payload=%v", payload)
 	}
 }
@@ -400,5 +401,209 @@ func TestExplicitPromptIgnoresInheritedStdin(t *testing.T) {
 	}
 	if payload["status"] != "disabled" || payload["provider_used"] != "codex" {
 		t.Fatalf("payload=%v", payload)
+	}
+}
+
+func TestDefaultOmitsUserFacingSummary(t *testing.T) {
+	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	t.Setenv("AI_DISPATCH_CONFIG", filepath.Join(t.TempDir(), "missing-config.json"))
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"send", "codex", "hello", "--json-result"}, &stdout, &stderr)
+	if code != 3 {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := payload["user_facing_summary"]; ok {
+		t.Fatalf("default should omit wrap-up: %v", payload)
+	}
+	if _, ok := payload["agent_hint"]; ok {
+		t.Fatalf("default should omit agent_hint: %v", payload)
+	}
+}
+
+func TestNoWrapUpFlagDisablesUserFacingSummary(t *testing.T) {
+	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	t.Setenv("AI_DISPATCH_CONFIG", filepath.Join(t.TempDir(), "missing-config.json"))
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"send", "codex", "hello", "--json-result", "--no-wrap-up"}, &stdout, &stderr)
+	if code != 3 {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := payload["user_facing_summary"]; ok {
+		t.Fatalf("wrap-up should be omitted: %v", payload)
+	}
+	if _, ok := payload["agent_hint"]; ok {
+		t.Fatalf("agent_hint should be omitted: %v", payload)
+	}
+	if strings.Contains(stderr.String(), "[ai-dispatch") || strings.Contains(stderr.String(), "You MUST paste") {
+		t.Fatalf("stderr leaked wrap-up: %s", stderr.String())
+	}
+}
+
+func TestConfigDisablesUserFacingSummary(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "config.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"claude_transport":"print","user_facing_summary":false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AI_DISPATCH_HOME", home)
+	t.Setenv("AI_DISPATCH_CONFIG", path)
+	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"send", "codex", "hello", "--json-result"}, &stdout, &stderr)
+	if code != 3 {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := payload["user_facing_summary"]; ok {
+		t.Fatalf("wrap-up should be omitted: %v", payload)
+	}
+}
+
+func TestConfigEnablesUserFacingSummary(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "config.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"claude_transport":"print","user_facing_summary":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AI_DISPATCH_HOME", home)
+	t.Setenv("AI_DISPATCH_CONFIG", path)
+	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"send", "codex", "hello", "--json-result"}, &stdout, &stderr)
+	if code != 3 {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	summary, _ := payload["user_facing_summary"].(string)
+	if !strings.Contains(summary, "[ai-dispatch") {
+		t.Fatalf("payload=%v", payload)
+	}
+	hint, _ := payload["agent_hint"].(string)
+	if !strings.Contains(hint, "You MUST paste the dispatch result user_facing_summary") {
+		t.Fatalf("missing agent_hint: %v", payload)
+	}
+}
+
+func TestWrapUpFlagOverridesConfigOff(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "config.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"claude_transport":"print","user_facing_summary":false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AI_DISPATCH_HOME", home)
+	t.Setenv("AI_DISPATCH_CONFIG", path)
+	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"send", "codex", "hello", "--json-result", "--wrap-up"}, &stdout, &stderr)
+	if code != 3 {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	summary, _ := payload["user_facing_summary"].(string)
+	if !strings.Contains(summary, "[ai-dispatch") {
+		t.Fatalf("payload=%v", payload)
+	}
+}
+
+func TestWrapUpAndNoWrapUpConflict(t *testing.T) {
+	var stderr bytes.Buffer
+	_, _, err := parseSend("send", []string{"codex", "hello", "--wrap-up", "--no-wrap-up"}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "cannot be used together") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestNoWrapUpOverridesConfigTrue(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "config.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"claude_transport":"print","user_facing_summary":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AI_DISPATCH_HOME", home)
+	t.Setenv("AI_DISPATCH_CONFIG", path)
+	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"send", "codex", "hello", "--json-result", "--no-wrap-up"}, &stdout, &stderr)
+	if code != 3 {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := payload["user_facing_summary"]; ok {
+		t.Fatalf("--no-wrap-up should omit wrap-up: %v", payload)
+	}
+	if strings.Contains(stderr.String(), "[ai-dispatch") || strings.Contains(stderr.String(), "You MUST paste") {
+		t.Fatalf("stderr leaked wrap-up: %s", stderr.String())
+	}
+}
+
+func TestStreamProgressInputErrorKeepsStderrNDJSON(t *testing.T) {
+	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	t.Setenv("AI_DISPATCH_CONFIG", filepath.Join(t.TempDir(), "missing-config.json"))
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"send", "codex", "--json-result", "--stream-progress", "--wrap-up"}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	for _, line := range strings.Split(strings.TrimSpace(stderr.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var event map[string]any
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("stream-progress stderr should stay NDJSON, got %s", stderr.String())
+		}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	summary, _ := payload["user_facing_summary"].(string)
+	if !strings.Contains(summary, "Failed: input error") {
+		t.Fatalf("payload=%v", payload)
+	}
+}
+
+func TestStreamProgressFirstRunKeepsStderrNDJSON(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AI_DISPATCH_HOME", home)
+	t.Setenv("AI_DISPATCH_CONFIG", filepath.Join(home, "config.json"))
+	t.Setenv("AI_DISPATCH_PREFERENCES", filepath.Join(home, "preferences.md"))
+	t.Setenv("AI_DISPATCH_RUNS_DIR", filepath.Join(home, "runs"))
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"send", "codex", "hello", "--json-result", "--stream-progress", "--wrap-up"}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("expected provider failure, stdout=%s", stdout.String())
+	}
+	if strings.Contains(stderr.String(), "首次调用") || strings.Contains(stderr.String(), "配置初始化完成") {
+		t.Fatalf("first-run plaintext leaked into stream-progress stderr: %s", stderr.String())
+	}
+	for _, line := range strings.Split(strings.TrimSpace(stderr.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var event map[string]any
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("stream-progress stderr should stay NDJSON, got %s", stderr.String())
+		}
 	}
 }

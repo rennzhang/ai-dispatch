@@ -46,6 +46,7 @@ ai-dispatch init --force
 | 字段 | 说明 |
 |---|---|
 | `claude_transport` | Claude 调用方式：`print`、`pty`、`auto`、`disabled` |
+| `user_facing_summary` | 是否在 send/resume 收口时写出给用户看的卡片。省略或 `false` 为关；`true` 开启。单次可用 `--wrap-up` / `--no-wrap-up` 覆盖 |
 | `models` | 用户已经确认并主动加入的本机模型候选池；key 是短名，value 是按顺序尝试的候选数组 |
 | `models.<name>[].provider` | 真实 provider：`codex`、`claude`、`opencode`、`antigravity`、`grok`、`cursor` |
 | `models.<name>[].model` | 传给底层 provider CLI 的真实 model id |
@@ -55,6 +56,16 @@ ai-dispatch init --force
 | `providers.opencode.catalog_model_count` | opencode 已认证 provider 的 catalog 模型数量摘要，不证明逐模型可运行 |
 
 `models` 是可执行短名路由，也是用户自己维护的可用模型候选池；`preferences.md` 是场景偏好，`providers` 是诊断摘要。不要把三者混在一起。
+
+调用卡片默认关闭。要在 Agent 回复里看到 `[ai-dispatch result]` 这块，在 config.json 里打开：
+
+```json
+{
+  "user_facing_summary": true
+}
+```
+
+单次覆盖用 `--wrap-up` 或 `--no-wrap-up`。
 
 需要查看用户已经添加并主动维护的模型池时，读 `config.json` 的 `models` 字段：
 

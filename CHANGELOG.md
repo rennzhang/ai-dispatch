@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+## v0.7.4
+
+- Keep `user_facing_summary` as a line-broken card: `[ai-dispatch result|degraded|failed]`, then Target / Duration / Session ID; add Degraded or Failed lines only when needed.
+- Tell calling agents to keep only the latest wrap-up per session ID in the final user reply; replace earlier cards instead of stacking resume results.
+- Add `user_facing_summary` config (default off) and `--wrap-up` / `--no-wrap-up`. Set `true` in config to show the wrap-up card.
+- Keep `--stream-progress` stderr as NDJSON on first-run setup and pre-dispatch errors; put wrap-up on the terminal progress event instead of plaintext.
+
 ## v0.7.3
 
 - Rename the wrap-up block to `**ai-dispatch Result**` with `Target` and `Duration` labels.

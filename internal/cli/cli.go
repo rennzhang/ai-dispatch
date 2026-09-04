@@ -13,6 +13,7 @@ import (
 	"github.com/rennzhang/ai-dispatch/internal/contract"
 	"github.com/rennzhang/ai-dispatch/internal/dispatch"
 	"github.com/rennzhang/ai-dispatch/internal/output"
+	"github.com/rennzhang/ai-dispatch/internal/progress"
 	"github.com/rennzhang/ai-dispatch/internal/providers/antigravity"
 	"github.com/rennzhang/ai-dispatch/internal/providers/claude"
 	"github.com/rennzhang/ai-dispatch/internal/runstore"
@@ -95,6 +96,8 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "Common flags:")
 	fmt.Fprintln(w, "  --json-result                  write ProviderResult JSON to stdout")
 	fmt.Fprintln(w, "  --stream-progress              write progress NDJSON to stderr")
+	fmt.Fprintln(w, "  --wrap-up                      enable the user-facing wrap-up card (default: off)")
+	fmt.Fprintln(w, "  --no-wrap-up                   do not emit the user-facing wrap-up card")
 	fmt.Fprintln(w, "  --effort level                 reasoning effort: auto|none|minimal|low|medium|high|xhigh|max")
 	fmt.Fprintln(w, "  --fast                         request provider fast mode; unsupported providers use standard speed with fast_fallback_reason")
 	fmt.Fprintln(w, "  --provider-opt key=value        provider option, e.g. claude.transport=print|pty|auto")
@@ -188,18 +191,18 @@ func send(argv []string, stdout io.Writer, stderr io.Writer, stdin io.Reader) in
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
-		return emitDispatchError(stdout, stderr, jsonResult, err.Error(), 2, contract.FailureInput)
+		return emitDispatchError(stdout, stderr, jsonResult, err.Error(), 2, contract.FailureInput, disableUserFacingFromArgv(argv), containsArg(argv, "--stream-progress"))
 	}
 	if req.Target == "" {
-		return emitDispatchError(stdout, stderr, jsonResult, "target is required", 2, contract.FailureInput)
+		return emitDispatchError(stdout, stderr, jsonResult, "target is required", 2, contract.FailureInput, req.DisableUserFacing, req.StreamProgress)
 	}
 	if err := prepareRequest(&req, stdin); err != nil {
-		return emitDispatchError(stdout, stderr, jsonResult, err.Error(), 2, contract.FailureInput)
+		return emitDispatchError(stdout, stderr, jsonResult, err.Error(), 2, contract.FailureInput, req.DisableUserFacing, req.StreamProgress)
 	}
 	if strings.TrimSpace(req.Prompt) == "" && req.PromptFile == "" {
-		return emitDispatchError(stdout, stderr, jsonResult, "Either prompt, --prompt-file, or stdin input is required", 2, contract.FailureInput)
+		return emitDispatchError(stdout, stderr, jsonResult, "Either prompt, --prompt-file, or stdin input is required", 2, contract.FailureInput, req.DisableUserFacing, req.StreamProgress)
 	}
-	if code, ok := ensureExecutionSetup(jsonResult, stdout, stderr); !ok {
+	if code, ok := ensureExecutionSetup(req, jsonResult, stdout, stderr); !ok {
 		return code
 	}
 	result := dispatch.ExecuteWithOptions(req, dispatch.Options{ProgressWriter: progressWriter(req, stderr)})
@@ -223,18 +226,18 @@ func resume(argv []string, stdout io.Writer, stderr io.Writer, stdin io.Reader) 
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
-		return emitDispatchError(stdout, stderr, jsonResult, err.Error(), 2, contract.FailureInput)
+		return emitDispatchError(stdout, stderr, jsonResult, err.Error(), 2, contract.FailureInput, disableUserFacingFromArgv(argv), containsArg(argv, "--stream-progress"))
 	}
 	if req.SessionID == "" {
-		return emitDispatchError(stdout, stderr, jsonResult, "--session-id is required", 2, contract.FailureInput)
+		return emitDispatchError(stdout, stderr, jsonResult, "--session-id is required", 2, contract.FailureInput, req.DisableUserFacing, req.StreamProgress)
 	}
 	if err := prepareRequest(&req, stdin); err != nil {
-		return emitDispatchError(stdout, stderr, jsonResult, err.Error(), 2, contract.FailureInput)
+		return emitDispatchError(stdout, stderr, jsonResult, err.Error(), 2, contract.FailureInput, req.DisableUserFacing, req.StreamProgress)
 	}
 	if strings.TrimSpace(req.Prompt) == "" && req.PromptFile == "" {
-		return emitDispatchError(stdout, stderr, jsonResult, "Either prompt, --prompt-file, or stdin input is required", 2, contract.FailureInput)
+		return emitDispatchError(stdout, stderr, jsonResult, "Either prompt, --prompt-file, or stdin input is required", 2, contract.FailureInput, req.DisableUserFacing, req.StreamProgress)
 	}
-	if code, ok := ensureExecutionSetup(jsonResult, stdout, stderr); !ok {
+	if code, ok := ensureExecutionSetup(req, jsonResult, stdout, stderr); !ok {
 		return code
 	}
 	result := dispatch.ExecuteWithOptions(req, dispatch.Options{ProgressWriter: progressWriter(req, stderr)})
@@ -252,19 +255,21 @@ func resume(argv []string, stdout io.Writer, stderr io.Writer, stdin io.Reader) 
 	return result.ExitCode
 }
 
-func ensureExecutionSetup(jsonResult bool, stdout io.Writer, stderr io.Writer) (int, bool) {
+func ensureExecutionSetup(req contract.DispatchRequest, jsonResult bool, stdout io.Writer, stderr io.Writer) (int, bool) {
 	lastSetupResult = nil
-	if config.StateMissing() {
+	if config.StateMissing() && !req.StreamProgress {
 		fmt.Fprintln(stderr, "ai-dispatch: 首次调用，正在初始化配置...")
 	}
 	br, err := setup.Ensure()
 	if err != nil {
-		return emitDispatchError(stdout, stderr, jsonResult, fmt.Sprintf("config setup failed: %v", err), 1, contract.FailureConfig), false
+		return emitDispatchError(stdout, stderr, jsonResult, fmt.Sprintf("config setup failed: %v", err), 1, contract.FailureConfig, req.DisableUserFacing, req.StreamProgress), false
 	}
 	if br.Summary != nil {
-		printSetupSummary(stderr, br.Summary)
 		lastSetupResult = &br
-		fmt.Fprintln(stderr, "ai-dispatch: 继续执行任务...")
+		if !req.StreamProgress {
+			printSetupSummary(stderr, br.Summary)
+			fmt.Fprintln(stderr, "ai-dispatch: 继续执行任务...")
+		}
 	}
 	return 0, true
 }
@@ -333,7 +338,7 @@ func injectFirstRun(result contract.ProviderResult, jsonResult bool, stderr io.W
 
 func finalizeAndPersistResult(req contract.DispatchRequest, result contract.ProviderResult, jsonResult bool, stderr io.Writer) contract.ProviderResult {
 	result = injectFirstRun(result, jsonResult, stderr)
-	result = output.AttachUserFacing(result)
+	result = output.ApplyWrapUp(result, !req.DisableUserFacing)
 	if err := runstore.WriteResultWithTask("", "", req.TaskName, result); err != nil {
 		result.Warnings = append(result.Warnings, "runstore write failed: "+err.Error())
 	}
@@ -440,6 +445,8 @@ func parseSend(command string, argv []string, stderr io.Writer) (contract.Dispat
 	taskName := fs.String("task-name", "", "task name")
 	effort := fs.String("effort", "", "reasoning effort: auto|none|minimal|low|medium|high|xhigh|max")
 	fast := fs.Bool("fast", false, "request provider fast mode; unsupported providers use standard speed with fast_fallback_reason")
+	wrapUp := fs.Bool("wrap-up", false, "enable the user-facing wrap-up card (default: off)")
+	noWrapUp := fs.Bool("no-wrap-up", false, "do not emit the user-facing wrap-up card")
 	providerOpts := multiFlag{}
 	fs.Var(&providerOpts, "provider-opt", "provider option, e.g. claude.transport=print|pty|auto")
 	if err := fs.Parse(argv); err != nil {
@@ -484,6 +491,11 @@ func parseSend(command string, argv []string, stderr io.Writer) (contract.Dispat
 		}
 	}
 	req.ActivityTimeoutSeconds = defaultActivityTimeoutSeconds(*activityTimeout)
+	disable, err := disableUserFacing(*wrapUp, *noWrapUp)
+	if err != nil {
+		return contract.DispatchRequest{}, *jsonResult, err
+	}
+	req.DisableUserFacing = disable
 	return req, *jsonResult, nil
 }
 
@@ -578,7 +590,7 @@ func isBoolFlag(arg string) bool {
 		name = before
 	}
 	switch name {
-	case "--json-result", "--stream-progress", "--fast", "--help", "-h":
+	case "--json-result", "--stream-progress", "--fast", "--wrap-up", "--no-wrap-up", "--help", "-h":
 		return true
 	default:
 		return false
@@ -668,18 +680,61 @@ func emitCLIError(stdout io.Writer, stderr io.Writer, jsonResult bool, message s
 	return exitCode
 }
 
-func emitDispatchError(stdout io.Writer, stderr io.Writer, jsonResult bool, message string, exitCode int, failure contract.FailureClass) int {
+func emitDispatchError(stdout io.Writer, stderr io.Writer, jsonResult bool, message string, exitCode int, failure contract.FailureClass, disableUserFacing bool, streamProgress bool) int {
 	if failure == "" {
 		failure = contract.FailureInput
 	}
 	result := contract.ErrorResult(contract.StatusError, failure, message, exitCode)
-	result = output.AttachUserFacing(result)
-	output.WriteUserFacingNotice(stderr, result)
+	result = output.ApplyWrapUp(result, !disableUserFacing)
+	if streamProgress {
+		progress.NewEmitter(result.ProviderUsed, stderr).EmitTerminal(result.OK, result.AgentHint, result.UserFacingSummary)
+	} else {
+		output.WriteUserFacingNotice(stderr, result)
+	}
 	if jsonResult {
 		return writeProviderResult(stdout, result)
 	}
-	fmt.Fprintln(stderr, "ai-dispatch: error:", message)
+	if !streamProgress {
+		fmt.Fprintln(stderr, "ai-dispatch: error:", message)
+	}
 	return exitCode
+}
+
+func disableUserFacing(wrapUp bool, noWrapUp bool) (bool, error) {
+	if wrapUp && noWrapUp {
+		return false, fmt.Errorf("--wrap-up and --no-wrap-up cannot be used together")
+	}
+	enabled := false
+	if cfg, err := config.Load(); err == nil {
+		enabled = cfg.UserFacingSummaryEnabled()
+	}
+	if noWrapUp {
+		enabled = false
+	}
+	if wrapUp {
+		enabled = true
+	}
+	return !enabled, nil
+}
+
+func disableUserFacingFromArgv(argv []string) bool {
+	wrapUp, noWrapUp := false, false
+	for _, arg := range argv {
+		if arg == "--" {
+			break
+		}
+		switch arg {
+		case "--wrap-up", "--wrap-up=true":
+			wrapUp = true
+		case "--no-wrap-up", "--no-wrap-up=true":
+			noWrapUp = true
+		}
+	}
+	disable, err := disableUserFacing(wrapUp, noWrapUp)
+	if err != nil {
+		return true
+	}
+	return disable
 }
 
 func writeProviderResult(stdout io.Writer, result contract.ProviderResult) int {

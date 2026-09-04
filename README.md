@@ -130,6 +130,7 @@ npx skills add rennzhang/ai-dispatch -g --all
 ai-dispatch 有两个用户态文件：
 
 - `~/.ai-dispatch/config.json` 的 `models` 字段：你这台机器已添加的模型短名和候选池。
+- `~/.ai-dispatch/config.json` 的 `user_facing_summary`：是否在回复里贴调用卡片，默认关闭。设为 `true` 开启。
 - `~/.ai-dispatch/preferences.md`：你喜欢在什么场景用哪些模型。
 
 短名不会开箱即用。先把确认能用的模型写进 config.json models，再在 preferences.md 里写场景偏好。

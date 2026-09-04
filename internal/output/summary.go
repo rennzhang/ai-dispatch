@@ -9,15 +9,23 @@ import (
 )
 
 const (
-	userFacingTitle = "**ai-dispatch Result**"
-	agentHint       = "You MUST paste the dispatch result user_facing_summary into the final reply to the user verbatim!"
+	AgentHint = "You MUST paste the dispatch result user_facing_summary into the final reply to the user verbatim! Keep only the latest wrap-up per session ID; replace any earlier card for the same session, do not stack them."
 )
 
 func AttachUserFacing(result contract.ProviderResult) contract.ProviderResult {
+	return ApplyWrapUp(result, true)
+}
+
+func ApplyWrapUp(result contract.ProviderResult, enabled bool) contract.ProviderResult {
 	result.DurationText = FormatDurationText(result.DurationMS)
+	if !enabled {
+		result.AgentHint = ""
+		result.UserFacingSummary = ""
+		return result
+	}
 	result.UserFacingSummary = RenderUserFacingSummary(result)
 	if result.UserFacingSummary != "" {
-		result.AgentHint = agentHint
+		result.AgentHint = AgentHint
 	}
 	return result
 }
@@ -34,18 +42,24 @@ func FormatDurationText(durationMS int64) string {
 }
 
 func RenderUserFacingSummary(result contract.ProviderResult) string {
-	lines := []string{userFacingTitle}
-	if line := actualCallLine(result); line != "" {
-		lines = append(lines, line)
+	header := "[ai-dispatch result]"
+	if !result.OK {
+		header = "[ai-dispatch failed]"
+	} else if result.Degraded {
+		header = "[ai-dispatch degraded]"
 	}
-	if result.Degraded {
-		lines = append(lines, degradeLine(result))
+	lines := []string{header}
+	if route := routeLabel(result); route != "" {
+		lines = append(lines, "Target: "+route)
 	}
 	if !result.OK {
-		lines = append(lines, "失败："+failureLabel(result))
+		lines = append(lines, "Failed: "+failureLabel(result))
+	}
+	if result.Degraded {
+		lines = append(lines, "Degraded: "+degradeLine(result))
 	}
 	if includeDuration(result) {
-		lines = append(lines, "Duration："+FormatDurationText(result.DurationMS))
+		lines = append(lines, "Duration: "+FormatDurationText(result.DurationMS))
 	}
 	if sessionID := strings.TrimSpace(result.SessionID); sessionID != "" {
 		lines = append(lines, "Session ID: "+sessionID)
@@ -59,25 +73,24 @@ func WriteUserFacingNotice(w io.Writer, result contract.ProviderResult) {
 	}
 	summary := strings.TrimSpace(result.UserFacingSummary)
 	if summary == "" {
-		summary = RenderUserFacingSummary(result)
-	}
-	if summary == "" {
 		return
 	}
 	fmt.Fprintln(w, summary)
-	fmt.Fprintln(w, agentHint)
+	if hint := strings.TrimSpace(result.AgentHint); hint != "" {
+		fmt.Fprintln(w, hint)
+	}
 }
 
-func actualCallLine(result contract.ProviderResult) string {
+func routeLabel(result contract.ProviderResult) string {
 	provider := strings.TrimSpace(result.ProviderUsed)
 	model := strings.TrimSpace(result.ModelUsed)
 	switch {
 	case provider != "" && model != "":
-		return "Target：" + provider + " / " + model
+		return provider + " / " + model
 	case provider != "":
-		return "Target：" + provider
+		return provider
 	case model != "":
-		return "Target：" + model
+		return model
 	default:
 		return ""
 	}
@@ -89,14 +102,14 @@ func includeDuration(result contract.ProviderResult) bool {
 
 func degradeLine(result contract.ProviderResult) string {
 	fromProvider, fromModel := degradeSource(result)
-	line := "降级："
+	line := ""
 	switch {
 	case fromProvider != "" && fromModel != "":
-		line += fromProvider + " / " + fromModel + " 失败"
+		line += fromProvider + " / " + fromModel + " failed"
 	case fromProvider != "":
-		line += fromProvider + " 失败"
+		line += fromProvider + " failed"
 	default:
-		line += "已切换候选"
+		line += "switched candidate"
 	}
 	to := strings.TrimSpace(result.ProviderUsed)
 	toModel := strings.TrimSpace(result.ModelUsed)
@@ -105,7 +118,7 @@ func degradeLine(result contract.ProviderResult) string {
 		if to == fromProvider && toModel != "" {
 			switched = to + " / " + toModel
 		}
-		line += "，已切换到 " + switched
+		line += " → " + switched
 	}
 	return line
 }
@@ -138,19 +151,19 @@ func failureLabel(result contract.ProviderResult) string {
 	if result.FailureClass != nil {
 		switch *result.FailureClass {
 		case contract.FailureConfig:
-			return "配置错误"
+			return "config error"
 		case contract.FailureRuntime:
-			return "运行时错误"
+			return "runtime error"
 		case contract.FailureNetwork:
-			return "网络错误"
+			return "network error"
 		case contract.FailureQuota:
-			return "额度不足"
+			return "quota exceeded"
 		case contract.FailureTimeout:
-			return "超时"
+			return "timeout"
 		case contract.FailureInput:
-			return "输入错误"
+			return "input error"
 		case contract.FailureUnknown:
-			return "调用失败"
+			return "failed"
 		}
 		if label := strings.TrimSpace(string(*result.FailureClass)); label != "" {
 			return label
@@ -159,14 +172,14 @@ func failureLabel(result contract.ProviderResult) string {
 	if result.Status != "" && result.Status != contract.StatusSuccess {
 		switch result.Status {
 		case contract.StatusQuota:
-			return "额度不足"
+			return "quota exceeded"
 		case contract.StatusTimeout:
-			return "超时"
+			return "timeout"
 		case contract.StatusNotFound:
-			return "未找到"
+			return "not found"
 		case contract.StatusDisabled:
-			return "不可用"
+			return "unavailable"
 		}
 	}
-	return "调用失败"
+	return "failed"
 }

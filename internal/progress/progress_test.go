@@ -207,8 +207,8 @@ func TestEmitterBoundsLargeHookChunkState(t *testing.T) {
 func TestEmitTerminalIncludesUserFacingSummary(t *testing.T) {
 	var buf strings.Builder
 	emitter := NewEmitter("cursor", &buf)
-	summary := "**ai-dispatch Result**\nTarget：cursor / kimi-k3-high"
-	emitter.EmitTerminal(true, "You MUST paste the dispatch result user_facing_summary into the final reply to the user verbatim!", summary)
+	summary := "[ai-dispatch result]\nTarget: cursor / kimi-k3-high\nDuration: 00:00:00\nSession ID: sess"
+	emitter.EmitTerminal(true, "", summary)
 	lines := parseLines(t, buf.String())
 	if len(lines) != 1 {
 		t.Fatalf("lines=%v", lines)
@@ -218,7 +218,7 @@ func TestEmitTerminalIncludesUserFacingSummary(t *testing.T) {
 		t.Fatalf("event=%v", event)
 	}
 	directive, _ := event["directive"].(string)
-	if !strings.Contains(directive, "You MUST paste the dispatch result user_facing_summary") || !strings.Contains(directive, "Target：cursor / kimi-k3-high") {
+	if !strings.Contains(directive, "latest wrap-up per session ID") || !strings.Contains(directive, "cursor / kimi-k3-high") {
 		t.Fatalf("directive=%q", directive)
 	}
 }

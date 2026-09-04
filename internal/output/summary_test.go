@@ -40,15 +40,15 @@ func TestRenderUserFacingSummarySuccess(t *testing.T) {
 	}
 	got := RenderUserFacingSummary(result)
 	want := strings.Join([]string{
-		"**ai-dispatch Result**",
-		"Target：cursor / kimi-k3-high",
-		"Duration：00:04:49",
+		"[ai-dispatch result]",
+		"Target: cursor / kimi-k3-high",
+		"Duration: 00:04:49",
 		"Session ID: d42b2733-9e2f-44a9-9dc8-47bcd4f044f7",
 	}, "\n")
 	if got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
 	}
-	if strings.Contains(got, "降级") || strings.Contains(got, "失败") || strings.Contains(got, "请求") {
+	if strings.Contains(got, "degraded") || strings.Contains(got, "failed") || strings.Contains(got, "请求") {
 		t.Fatalf("success summary leaked extra fields:\n%s", got)
 	}
 }
@@ -70,10 +70,10 @@ func TestRenderUserFacingSummaryDegraded(t *testing.T) {
 	}
 	got := RenderUserFacingSummary(result)
 	want := strings.Join([]string{
-		"**ai-dispatch Result**",
-		"Target：cursor / claude-fable-5-thinking-high",
-		"降级：claude / claude-fable-5 失败，已切换到 cursor",
-		"Duration：00:09:44",
+		"[ai-dispatch degraded]",
+		"Target: cursor / claude-fable-5-thinking-high",
+		"Degraded: claude / claude-fable-5 failed → cursor",
+		"Duration: 00:09:44",
 		"Session ID: 4acd848e-518d-4595-8bee-c7a7f9352f08",
 	}, "\n")
 	if got != want {
@@ -93,15 +93,15 @@ func TestRenderUserFacingSummaryFailure(t *testing.T) {
 	}
 	got := RenderUserFacingSummary(result)
 	want := strings.Join([]string{
-		"**ai-dispatch Result**",
-		"Target：cursor / kimi-k3-high",
-		"失败：配置错误",
-		"Duration：00:00:12",
+		"[ai-dispatch failed]",
+		"Target: cursor / kimi-k3-high",
+		"Failed: config error",
+		"Duration: 00:00:12",
 	}, "\n")
 	if got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
 	}
-	if strings.Contains(got, "Session ID") {
+	if strings.Contains(got, "Session ID:") {
 		t.Fatalf("missing session should omit the line:\n%s", got)
 	}
 }
@@ -120,7 +120,7 @@ func TestRenderUserFacingSummarySameProviderDegrade(t *testing.T) {
 		},
 	}
 	got := RenderUserFacingSummary(result)
-	if !strings.Contains(got, "降级：opencode / model-a 失败，已切换到 opencode / model-b") {
+	if !strings.Contains(got, "Degraded: opencode / model-a failed → opencode / model-b") {
 		t.Fatalf("got:\n%s", got)
 	}
 }
@@ -130,8 +130,8 @@ func TestRenderUserFacingSummaryInputErrorOmitsEmptyFields(t *testing.T) {
 	result := contract.ErrorResult(contract.StatusError, failure, "unsupported target: mimo-pro", 2)
 	got := RenderUserFacingSummary(result)
 	want := strings.Join([]string{
-		"**ai-dispatch Result**",
-		"失败：输入错误",
+		"[ai-dispatch failed]",
+		"Failed: input error",
 	}, "\n")
 	if got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
@@ -172,6 +172,9 @@ func TestAttachUserFacingJSONKeyOrder(t *testing.T) {
 	if result.AgentHint == "" || strings.Contains(result.UserFacingSummary, "You MUST paste") {
 		t.Fatalf("hint=%q summary=%q", result.AgentHint, result.UserFacingSummary)
 	}
+	if result.AgentHint != AgentHint || !strings.Contains(AgentHint, "latest wrap-up per session ID") {
+		t.Fatalf("agent hint missing latest-per-session rule: %q", result.AgentHint)
+	}
 }
 
 func TestWriteUserFacingNotice(t *testing.T) {
@@ -188,7 +191,28 @@ func TestWriteUserFacingNotice(t *testing.T) {
 	if !strings.Contains(got, result.UserFacingSummary) {
 		t.Fatalf("missing summary:\n%s", got)
 	}
-	if !strings.Contains(got, "You MUST paste the dispatch result user_facing_summary into the final reply to the user verbatim!") {
+	if !strings.Contains(got, AgentHint) {
 		t.Fatalf("missing hint:\n%s", got)
+	}
+}
+
+func TestApplyWrapUpDisabled(t *testing.T) {
+	result := AttachUserFacing(contract.ProviderResult{
+		OK:           true,
+		Status:       contract.StatusSuccess,
+		ProviderUsed: "cursor",
+		ModelUsed:    "kimi-k3-high",
+		SessionID:    "sess",
+		DurationMS:   12000,
+	})
+	if result.UserFacingSummary == "" || result.AgentHint == "" {
+		t.Fatalf("expected wrap-up: %+v", result)
+	}
+	result = ApplyWrapUp(result, false)
+	if result.UserFacingSummary != "" || result.AgentHint != "" {
+		t.Fatalf("disabled wrap-up leaked: %+v", result)
+	}
+	if result.DurationText != "00:00:12" {
+		t.Fatalf("duration_text=%q", result.DurationText)
 	}
 }

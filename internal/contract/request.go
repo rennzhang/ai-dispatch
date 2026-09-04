@@ -11,6 +11,7 @@ type DispatchRequest struct {
 	SessionID              string                       `json:"session_id,omitempty"`
 	SessionProvider        string                       `json:"session_provider,omitempty"`
 	JSONResult             bool                         `json:"json_result"`
+	DisableUserFacing      bool                         `json:"disable_user_facing,omitempty"`
 	StreamProgress         bool                         `json:"stream_progress"`
 	TimeoutSeconds         int                          `json:"timeout_seconds"`
 	ActivityTimeoutSeconds int                          `json:"activity_timeout_seconds"`

@@ -11,10 +11,18 @@ import (
 const Version = 1
 
 type Config struct {
-	Version         int             `json:"version"`
-	ClaudeTransport string          `json:"claude_transport"`
-	Models          ModelsConfig    `json:"models"`
-	Providers       ProvidersConfig `json:"providers"`
+	Version           int             `json:"version"`
+	ClaudeTransport   string          `json:"claude_transport"`
+	UserFacingSummary *bool           `json:"user_facing_summary,omitempty"`
+	Models            ModelsConfig    `json:"models"`
+	Providers         ProvidersConfig `json:"providers"`
+}
+
+func (c Config) UserFacingSummaryEnabled() bool {
+	if c.UserFacingSummary == nil {
+		return false
+	}
+	return *c.UserFacingSummary
 }
 
 type ModelsConfig map[string][]ModelRoute
@@ -127,6 +135,13 @@ func decodeConfig(data []byte) (Config, error) {
 		if err := json.Unmarshal(value, &cfg.Providers); err != nil {
 			return Config{}, fmt.Errorf("providers must be an object")
 		}
+	}
+	if value, ok := raw["user_facing_summary"]; ok && string(value) != "null" {
+		var enabled bool
+		if err := json.Unmarshal(value, &enabled); err != nil {
+			return Config{}, fmt.Errorf("user_facing_summary must be a boolean")
+		}
+		cfg.UserFacingSummary = &enabled
 	}
 	return cfg, nil
 }

@@ -105,7 +105,7 @@ func completeDispatchResult(req contract.DispatchRequest, opts Options, result c
 			}
 		}
 	}
-	result = output.AttachUserFacing(result)
+	result = output.ApplyWrapUp(result, !req.DisableUserFacing)
 	if !req.StreamProgress || opts.ProgressWriter == nil {
 		return result
 	}
