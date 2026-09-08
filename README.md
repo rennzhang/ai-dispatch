@@ -1,92 +1,57 @@
 # ai-dispatch
 
-把一个 AI Agent 的任务，顺手派给另一家本机 AI CLI。
+让当前 AI Agent，用一套命令调用本机不同的 AI coding CLI。
 
-Claude、Codex、OpenCode、Antigravity/Gemini、Grok、Cursor 在 ai-dispatch 里都是同级 provider。你不用关心底层命令怎么拼，只要告诉当前 Agent：“用 ai-dispatch 找 Claude / Codex / OpenCode / Gemini / Grok / Cursor 看一下”。
+既可以在终端和脚本里调用，也可以作为 Claude Code / Codex 的 skill，让当前 Agent 用自然语言派发任务，例如：“用 ai-dispatch 找 Claude review 当前 diff”。
 
-适合：
+## 能做什么
 
-- 让另一个模型做严格 review。
-- 让一个模型实现，另一个模型复查。
-- 找第二视角，避免单模型盲区。
-- 把同一问题交给多个模型对照。
-- 在上一轮外部模型结果上继续追问。
+- **统一调用**：用同一套命令派发任务，ai-dispatch 负责适配各家 CLI 的参数和结果格式。
+- **模型路由**：给常用模型配置短名和候选顺序；调用失败时，按路由规则尝试后续候选。
+- **继续会话**：上一轮返回可继续的 session 后，可以接着追问、补充要求或继续修改。
+- **查看进度与结果**：提供流式进度、JSON 结果和本地调用记录，方便 Agent、脚本和自动化流程接入。
 
-ai-dispatch 是本地运行的薄 runtime：它只负责安装入口、模型短名路由、调用 provider、记录结果和继续会话，不替你做产品决策。
+## 适用场景
 
-## 安装
+| 场景 | 怎么用 |
+| --- | --- |
+| 独立 review | 让另一个模型检查当前 diff、找遗漏和风险 |
+| 实现与复查 | 让一个模型完成修复，再让另一个模型复查并核对测试结果 |
+| 排障与方案分析 | 把日志、代码或方案交给另一个模型，补充不同视角 |
+| 多模型对照 | 让当前 Agent 分别派发同一个问题，再汇总各模型的共识与分歧 |
+| 脚本与自动化 | 通过 CLI 派发任务、消费 JSON 结果，并按需继续会话 |
 
-有 Node.js 时，直接安装 CLI：
+## 当前支持的 provider
 
-```bash
-npm install -g ai-dispatch
-ai-dispatch doctor
-```
+ai-dispatch 当前内置支持六类本机 CLI provider：
 
-一次性执行可以用：
+| Provider | 底层 CLI | 常见用途 |
+| --- | --- | --- |
+| Codex | `codex` | 实现、修复、仓库内工程推进 |
+| Claude | `claude` | 高风险 review、判断、复杂推理 |
+| OpenCode | `opencode` | OpenRouter / OpenAI / Google 等模型 |
+| Antigravity/Gemini | `agy` | Gemini / Antigravity 视角 |
+| Grok | `grok` | Grok Build CLI，快速实现、分析、并行探索 |
+| Cursor | `cursor-agent` | Cursor 订阅内 Claude/GPT/Gemini/Kimi/Composer 模型 |
 
-```bash
-npx --yes ai-dispatch doctor
-```
+这里的 provider 指被调用的本机 CLI。使用前需要安装相应 CLI，并完成登录或 API 配置；具体可用模型和额度由对应账号与配置决定。Gemini 通过 Antigravity（`agy`）接入。
 
-npm 包会下载与包版本一致的 GitHub Release 原生二进制，并校验 SHA-256。它只安装 CLI；Claude Code 和 Codex skill 仍按下面方式安装。
+想接入更多 CLI provider 或参与贡献，见 [issue #1](https://github.com/rennzhang/ai-dispatch/issues/1)。
 
-通过 Homebrew 安装：
+## 使用示例
 
-```bash
-brew install rennzhang/tap/ai-dispatch
-```
+### 终端调用
 
-没有 Node.js，或希望一次安装 CLI 和两个 skill 时：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/rennzhang/ai-dispatch/main/scripts/install-remote.sh | bash
-```
-
-安装后可以直接调用：
-
-```bash
-ai-dispatch doctor
-```
-
-要确认 PATH、skill 或 npm 入口实际运行的是哪一份构建：
+安装后，在项目目录里调用本机已登录的 Codex CLI，检查当前变更：
 
 ```bash
-ai-dispatch version --format json
+ai-dispatch send codex "检查当前 diff，指出风险和遗漏，不修改文件" \
+  --cwd "$PWD" --json-result
 ```
 
-以返回的 `version`、`revision`、`modified` 为准；不要只看安装目录里的 `VERSION` 文件。
+### 直接复制这些提示词
 
-只安装 CLI：
-
-```bash
-AI_DISPATCH_SKILL_TARGET=none \
-  curl -fsSL https://raw.githubusercontent.com/rennzhang/ai-dispatch/main/scripts/install-remote.sh | bash
-```
-
-安装给 Claude Code：
-
-```bash
-npx skills add rennzhang/ai-dispatch -g --agent claude-code
-```
-
-安装给 Codex：
-
-```bash
-npx skills add rennzhang/ai-dispatch -g --agent codex
-```
-
-两个都装：
-
-```bash
-npx skills add rennzhang/ai-dispatch -g --all
-```
-
-`npx skills add` 只安装 skill；skill 会按需准备 runtime。需要人或脚本直接调用 CLI 时，用上面的 curl 安装。
-
-安装后，在终端、Claude 或 Codex 里都可以直接用。
-
-## 直接复制这些提示词
+在安装了 ai-dispatch skill 的 Claude Code / Codex 中，可以直接用自然语言派发。涉及模型短名时，先按[模型和偏好](#模型和偏好)配置可用模型，再将示例里的模型名替换成自己的选择。
 
 让 Claude Opus 做发版前 review：
 
@@ -110,7 +75,7 @@ npx skills add rennzhang/ai-dispatch -g --all
 最后汇总共识、冲突点和必须立刻修的项。
 ```
 
-## 继续追问
+### 继续追问
 
 如果上一轮外部模型返回了可继续的会话，直接让当前 Agent 追问它：
 
@@ -121,11 +86,40 @@ npx skills add rennzhang/ai-dispatch -g --all
 
 你不需要自己管理 session id；Agent 会从 ai-dispatch 的返回结果里拿。
 
+## 安装
+
+终端使用，安装 CLI（需要 Node.js 18+）：
+
+```bash
+npm install -g ai-dispatch
+ai-dispatch doctor
+```
+
+<details>
+<summary>Agent skill、Homebrew 和其他安装方式</summary>
+
+在 Claude Code / Codex 中用自然语言派发时，按当前使用的 Agent 安装对应 skill：
+
+```bash
+# Claude Code
+npx skills add rennzhang/ai-dispatch -g --agent claude-code
+
+# Codex
+npx skills add rennzhang/ai-dispatch -g --agent codex
+```
+
+`npx skills add` 只安装 skill；首次调用时会按需下载对应版本的 CLI。
+
+- [Homebrew、npx、无 Node.js 或同时安装 CLI 与 skill](docs/technical.md#安装形态)
+- [检查安装与实际运行的版本](docs/technical.md#检查安装)
+
+</details>
+
 ## 模型和偏好
 
 短名必须写进 ~/.ai-dispatch/config.json 的 models。没写进去的 kimi / qwen / gpt5.5 这类词会直接失败。
 
-你也可以直接说 provider 名：codex、claude、cursor、grok、opencode。
+你也可以直接说 provider 名：`codex`、`claude`、`cursor`、`grok`、`opencode`、`antigravity`（或 `gemini`）。
 
 ai-dispatch 有两个用户态文件：
 
@@ -151,32 +145,6 @@ review 场景优先用 <review-target>；代码实现优先用 <coding-target>�
 写进 ~/.ai-dispatch/preferences.md，保持简短清楚。
 ```
 
-## 当前支持的 provider
-
-ai-dispatch 当前内置支持六类本机 CLI provider：
-
-| Provider | 底层 CLI | 常见用途 |
-| --- | --- | --- |
-| Codex | `codex exec` | 实现、修复、仓库内工程推进 |
-| Claude | `claude -p` 或 PTY | 高风险 review、判断、复杂推理 |
-| OpenCode | `opencode run` | OpenRouter / OpenAI / Google 等模型 |
-| Antigravity/Gemini | `agy --print` | Gemini / Antigravity 视角 |
-| Grok | `grok --output-format streaming-json` | Grok Build CLI，快速实现、分析、并行探索 |
-| Cursor | `cursor-agent --print --output-format stream-json` | Cursor 订阅内 Claude/GPT/Gemini/Kimi/Composer 模型 |
-
-想接入更多 CLI provider 或参与贡献，见 [issue #1](https://github.com/rennzhang/ai-dispatch/issues/1)。
-
-## 技术文档
-
-日常使用先看本 README。需要底层细节时再看：
-
-- [技术篇](docs/technical.md)：CLI、JSON 结果、run history、provider scan、failure_class、发布。
-- [架构设计](DESIGN.md)：包边界、请求流程、状态目录。
-- [Changelog](CHANGELOG.md)：公开版本变更记录。
-- [Provider Acceptance](docs/provider-acceptance.md)：新增或回归 provider 的真实验收 harness。
-- [配置参考](skills/ai-dispatch/references/config.md)：`config.json` 字段和模型路由。
-- [偏好格式](skills/ai-dispatch/references/preferences.md)：`preferences.md` 怎么维护。
-
 ## Reasoning effort
 
 跨 provider 可用顶层 `--effort` 控制推理档位：
@@ -197,7 +165,9 @@ Codex 短名（gpt5.6-sol 等）需要写进 config.json。裸 send codex 使用
 ai-dispatch send gpt5.6-luna "implement the fix" --fast --json-result
 ```
 
-当前 Codex GPT-5.5/5.6 target 会应用 priority service tier。其他 provider 暂未确认有等价能力时仍按标准速度执行一次，并在结果里明确返回 `requested_fast=true`、`applied_fast=false` 和 `fast_fallback_reason`；不会静默声称已加速，也不会因此设置 `degraded` 或写入通用 `warnings`。切换前可用 `ai-dispatch models resolve <target> --format json` 读顶层 `fast`。
+- **支持范围**：当前 Codex GPT-5.5/5.6 target 会应用 priority service tier。
+- **未生效时**：其他 provider 暂未确认有等价能力时仍按标准速度执行一次，并在结果里明确返回 `requested_fast=true`、`applied_fast=false` 和 `fast_fallback_reason`；不会静默声称已加速，也不会因此设置 `degraded` 或写入通用 `warnings`。
+- **查询方式**：切换前可用 `ai-dispatch models resolve <target> --format json` 读顶层 `fast`。
 
 ## 安全
 
@@ -206,3 +176,14 @@ ai-dispatch 调的是你本机已安装的 AI CLI。某些 provider 可以读写
 Grok provider 为了非交互式执行默认使用 `grok.approval=always`。处理不可信 prompt 或不希望自动批准工具/文件操作时，传 `--provider-opt grok.approval=default`。
 
 Cursor provider 默认只信任工作区（`--trust`），不自动批准工具/文件操作；需要全自动执行时显式传 `--provider-opt cursor.approval=always`。Cursor 模型 ID 自带推理档位后缀（如 `claude-fable-5-thinking-high`），不接收 `--effort` 精确档位；需要其它档位时换用带对应后缀的短名。
+
+## 技术文档
+
+日常使用先看本 README。需要底层细节时再看：
+
+- [技术篇](docs/technical.md)：CLI、JSON 结果、run history、provider scan、failure_class、发布。
+- [架构设计](DESIGN.md)：包边界、请求流程、状态目录。
+- [Changelog](CHANGELOG.md)：公开版本变更记录。
+- [Provider Acceptance](docs/provider-acceptance.md)：新增或回归 provider 的真实验收 harness。
+- [配置参考](skills/ai-dispatch/references/config.md)：`config.json` 字段和模型路由。
+- [偏好格式](skills/ai-dispatch/references/preferences.md)：`preferences.md` 怎么维护。

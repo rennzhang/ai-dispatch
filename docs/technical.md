@@ -4,6 +4,8 @@
 
 ## 安装形态
 
+### npm
+
 有 Node.js 时，推荐通过 npm 安装 CLI：
 
 ```bash
@@ -18,6 +20,10 @@ npx --yes ai-dispatch doctor
 
 npm 包不内置平台二进制。安装时它会下载与 npm 包版本对应的 GitHub Release `.bin` 资产，并按同一 release 的 `SHA256SUMS` 校验后才执行。当前支持 darwin/linux 的 amd64/arm64，要求 Node.js 18+。
 
+通过 npm 安装时，npm 的 `ai-dispatch` 命令直接代理到包内已校验的 release binary；不写入 `~/.ai-dispatch/bin/`。
+
+### Homebrew
+
 Homebrew 用户通过独立 tap 安装：
 
 ```bash
@@ -26,7 +32,9 @@ brew install rennzhang/tap/ai-dispatch
 
 公式下载同一 GitHub Release 的平台 tarball，并使用生成时写入的 SHA-256。公式不是手工维护版本和 hash：`scripts/render-homebrew-formula.sh` 从 release `SHA256SUMS` 生成它。
 
-curl 仍可安装 CLI，并按需安装 skill：
+### 无 Node.js 或同时安装 CLI 与 skill
+
+通过 curl 安装时，默认同时安装 CLI、Claude Code skill 和 Codex skill：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/rennzhang/ai-dispatch/main/scripts/install-remote.sh | bash
@@ -35,9 +43,13 @@ curl -fsSL https://raw.githubusercontent.com/rennzhang/ai-dispatch/main/scripts/
 只安装 CLI：
 
 ```bash
-AI_DISPATCH_SKILL_TARGET=none \
-  curl -fsSL https://raw.githubusercontent.com/rennzhang/ai-dispatch/main/scripts/install-remote.sh | bash
+curl -fsSL https://raw.githubusercontent.com/rennzhang/ai-dispatch/main/scripts/install-remote.sh \
+  | AI_DISPATCH_SKILL_TARGET=none bash
 ```
+
+curl 安装脚本会下载 release tarball，把稳定 CLI 写到 `~/.ai-dispatch/bin/ai-dispatch`，并把 `ai-dispatch` 链接到 `~/.local/bin/`。如果不想创建 PATH 链接，设置 `AI_DISPATCH_LINK_DIR=none`。
+
+### Agent skill
 
 也可以只通过 skill 安装：
 
@@ -47,9 +59,18 @@ npx skills add rennzhang/ai-dispatch -g --agent codex
 npx skills add rennzhang/ai-dispatch -g --all
 ```
 
-通过 npm 安装时，npm 的 `ai-dispatch` 命令直接代理到包内已校验的 release binary；不写入 `~/.ai-dispatch/bin/`。通过 curl 安装时，安装脚本会下载 release tarball，把稳定 CLI 写到 `~/.ai-dispatch/bin/ai-dispatch`，并把 `ai-dispatch` 链接到 `~/.local/bin/`。如果不想创建 PATH 链接，设置 `AI_DISPATCH_LINK_DIR=none`。
-
 通过 `npx skills add` 安装时，skill 目录里只有轻量 wrapper。第一次执行 wrapper 时，它会按 `VERSION` 下载对应 GitHub Release tarball，并校验 checksum。
+
+### 检查安装
+
+检查 CLI 状态和当前入口实际运行的构建：
+
+```bash
+ai-dispatch doctor
+ai-dispatch version --format json
+```
+
+要确认 PATH、skill 或 npm 入口实际运行的是哪一份构建，以返回的 `version`、`revision`、`modified` 为准；不要只看安装目录里的 `VERSION` 文件。排查 skill 入口时，用对应的 skill wrapper 执行同一条 `version --format json` 命令。
 
 ## 路径
 
