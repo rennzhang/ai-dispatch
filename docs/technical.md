@@ -301,6 +301,30 @@ ai-dispatch send cursor-fable5 "Reply exactly: OK" --provider-opt cursor.approva
 
 `cursor.approval` 支持 `default`（只信任工作区，不自动批准工具/文件操作）和 `always`（追加 `--force` 全自动执行）。默认 `default`。
 
+## OMP provider opts
+
+OMP 走本机 `omp --print --mode json`（oh-my-pi），适合 DeepSeek 等通过 OMP 配置的模型。`--effort` 映射到 `--thinking`（`none` → `off`，`auto` 不传）；能力仍以 config `models[].efforts` 声明为准，未声明时显式 `--effort` 回落 auto。不支持 `--fast`（未声明 `fast: true` 时以标准速度运行并给出 `fast_fallback_reason`）。`resume` 通过 `--resume <session-id>` 续接。
+
+```json
+{
+  "models": {
+    "deepseek-flash": [
+      { "provider": "omp", "model": "opencode-go/deepseek-flash", "efforts": ["high", "max"] }
+    ],
+    "dsf": [
+      { "provider": "omp", "model": "opencode-go/deepseek-flash", "efforts": ["high", "max"] }
+    ]
+  }
+}
+```
+
+```bash
+ai-dispatch send dsf "Reply exactly: OK" --effort high --json-result
+ai-dispatch send omp --model opencode-go/deepseek-flash "Reply exactly: OK" --provider-opt omp.approval=default
+```
+
+`omp.approval` 支持 `always`（默认，追加 `--auto-approve`）和 `default`（不自动批准工具/文件操作）。二进制查找顺序：`AI_DISPATCH_OMP_BIN` → `PATH` 中的 `omp` → `~/.bun/bin/omp` → `~/.local/bin/omp`。子进程环境保留 `OMP_` / `PI_` 前缀变量。
+
 ## Run history
 
 ```bash

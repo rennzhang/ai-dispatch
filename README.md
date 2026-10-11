@@ -33,7 +33,7 @@ ai-dispatch 当前内置支持七类本机 CLI provider：
 | Antigravity/Gemini | `agy` | Gemini / Antigravity 视角 |
 | Grok | `grok` | Grok Build CLI，快速实现、分析、并行探索 |
 | Cursor | `cursor-agent` | Cursor 订阅内 Claude/GPT/Gemini/Kimi/Composer 模型 |
-| OMP (oh-my-pi) | `omp` | DeepSeek 等通过 OMP 配置的模型（如 `opencode-go/deepseek-v4.1-flash`） |
+| OMP (oh-my-pi) | `omp` | DeepSeek 等通过 OMP 配置的模型（如 `opencode-go/deepseek-flash`） |
 
 这里的 provider 指被调用的本机 CLI。使用前需要安装相应 CLI，并完成登录或 API 配置；具体可用模型和额度由对应账号与配置决定。Gemini 通过 Antigravity（`agy`）接入。
 

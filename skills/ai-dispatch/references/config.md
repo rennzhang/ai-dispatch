@@ -134,10 +134,10 @@ ai-dispatch send grok "Reply exactly: OK" \
 {
   "models": {
     "deepseek-flash": [
-      { "provider": "omp", "model": "opencode-go/deepseek-v4.1-flash", "efforts": ["high", "max"] }
+      { "provider": "omp", "model": "opencode-go/deepseek-flash", "efforts": ["high", "max"] }
     ],
     "dsf": [
-      { "provider": "omp", "model": "opencode-go/deepseek-v4.1-flash", "efforts": ["high", "max"] }
+      { "provider": "omp", "model": "opencode-go/deepseek-flash", "efforts": ["high", "max"] }
     ],
     "deepseek-pro": [
       { "provider": "omp", "model": "opencode-go/deepseek-v4-pro", "efforts": ["high", "max"] }
@@ -150,7 +150,7 @@ ai-dispatch send grok "Reply exactly: OK" \
 ai-dispatch send deepseek-flash "…" --effort high --json-result
 ai-dispatch send dsf "…" --effort high --json-result
 ai-dispatch send deepseek-pro "…" --effort max --json-result
-ai-dispatch send omp --model opencode-go/deepseek-v4.1-flash "…" --effort max
+ai-dispatch send omp --model opencode-go/deepseek-flash "…" --effort max
 ```
 
 支持的 key：`omp.approval=always|default`。默认 `always` 传 `--auto-approve`。`--effort` 映射为 omp `--thinking`；`none` 对应 `off`。

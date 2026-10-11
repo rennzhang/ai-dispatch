@@ -1,11 +1,12 @@
 # Changelog
 
-## Unreleased
+## v0.9.0
 
 - Add native OMP (oh-my-pi / `omp`) provider: `omp --print --mode json` with `--thinking` mapped from top-level `--effort` (`none` → `off`), config-declared efforts/fast authority, and `omp.approval=always|default` (default auto-approve).
 - Probe/doctor/providers scan recognize `omp`; sanitized env keeps `OMP_` / `PI_` prefixes.
 - Skill/docs: OMP is a first-class provider alongside Codex/Claude/OpenCode/Cursor/Grok/Antigravity.
-- Rename DeepSeek flash short names: `deepseek` → `deepseek-flash` and `dsf` (both `omp` / `opencode-go/deepseek-v4.1-flash`); keep `deepseek-pro`. Trim declared efforts to `high`/`max` only.
+- `docs/technical.md` adds an OMP provider opts section (approval, binary lookup, env, effort/resume).
+- Rename DeepSeek flash short names: `deepseek` → `deepseek-flash` and `dsf` (both `omp` / `opencode-go/deepseek-flash`); keep `deepseek-pro`. Trim declared efforts to `high`/`max` only.
 
 ## v0.8.0
 
