@@ -19,6 +19,7 @@ import (
 	"github.com/rennzhang/ai-dispatch/internal/providers/codex"
 	"github.com/rennzhang/ai-dispatch/internal/providers/cursor"
 	"github.com/rennzhang/ai-dispatch/internal/providers/grok"
+	"github.com/rennzhang/ai-dispatch/internal/providers/omp"
 	"github.com/rennzhang/ai-dispatch/internal/providers/opencode"
 	"github.com/rennzhang/ai-dispatch/internal/routing"
 	"github.com/rennzhang/ai-dispatch/internal/runstore"
@@ -582,6 +583,8 @@ func providerFor(name string) (providers.Provider, bool) {
 		return grok.Provider{}, true
 	case "cursor":
 		return cursor.Provider{}, true
+	case "omp":
+		return omp.Provider{}, true
 	default:
 		return nil, false
 	}

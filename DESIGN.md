@@ -35,6 +35,7 @@ internal/providers/codex/     # Codex adapter
 internal/providers/opencode/  # OpenCode adapter
 internal/providers/claude/    # Claude print + PTY adapter
 internal/providers/antigravity/ # agy adapter
+internal/providers/omp/       # oh-my-pi / omp adapter
 internal/output/              # stdout/json/output-file/frontmatter
 internal/runstore/            # runs list/show/tail
 ```

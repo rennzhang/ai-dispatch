@@ -17,3 +17,16 @@ func TestSanitizedEnvKeepsCursorPrefix(t *testing.T) {
 		t.Fatalf("CURSOR_SOMETHING_ELSE missing from sanitized env: %q", joined)
 	}
 }
+
+func TestSanitizedEnvKeepsOMPPrefix(t *testing.T) {
+	t.Setenv("OMP_PROFILE", "work")
+	t.Setenv("PI_SMOL_MODEL", "opencode-go/deepseek-v4.1-flash")
+	env := SanitizedEnv(nil)
+	joined := strings.Join(env, "\n")
+	if !strings.Contains(joined, "OMP_PROFILE=work") {
+		t.Fatalf("OMP_PROFILE missing from sanitized env: %q", joined)
+	}
+	if !strings.Contains(joined, "PI_SMOL_MODEL=opencode-go/deepseek-v4.1-flash") {
+		t.Fatalf("PI_SMOL_MODEL missing from sanitized env: %q", joined)
+	}
+}

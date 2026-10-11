@@ -70,7 +70,7 @@ func Resolve(rawTarget string, explicitModel string) (DispatchTarget, error) {
 
 func providerName(normalized string) (string, bool) {
 	switch normalized {
-	case "codex", "opencode", "claude", "antigravity", "grok", "cursor":
+	case "codex", "opencode", "claude", "antigravity", "grok", "cursor", "omp":
 		return normalized, true
 	case "gemini":
 		return "antigravity", true
@@ -344,7 +344,7 @@ func ConfigModelTargets() []string {
 func SupportedTargets() []string {
 	seen := map[string]bool{}
 	targets := []string{}
-	for _, target := range append([]string{"codex", "opencode", "claude", "antigravity", "gemini", "grok", "cursor"}, ConfigModelTargets()...) {
+	for _, target := range append([]string{"codex", "opencode", "claude", "antigravity", "gemini", "grok", "cursor", "omp"}, ConfigModelTargets()...) {
 		if target == "" || seen[target] {
 			continue
 		}
@@ -356,7 +356,7 @@ func SupportedTargets() []string {
 
 func implementedProvider(provider string) bool {
 	switch provider {
-	case "codex", "opencode", "claude", "antigravity", "grok", "cursor":
+	case "codex", "opencode", "claude", "antigravity", "grok", "cursor", "omp":
 		return true
 	default:
 		return false

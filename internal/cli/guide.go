@@ -60,6 +60,7 @@ func printModelGuide(stdout io.Writer) error {
 	fmt.Fprintln(stdout, "- `antigravity`：调用 `agy --print`。")
 	fmt.Fprintln(stdout, "- `grok`：调用 Grok CLI。")
 	fmt.Fprintln(stdout, "- `cursor`：调用 `cursor-agent`。")
+	fmt.Fprintln(stdout, "- `omp`：调用 oh-my-pi / `omp`。")
 	fmt.Fprintln(stdout, "")
 	fmt.Fprintln(stdout, "## Configured short names")
 	fmt.Fprintln(stdout, "")

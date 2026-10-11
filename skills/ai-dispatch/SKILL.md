@@ -1,13 +1,13 @@
 ---
 name: ai-dispatch
-description: 通过 ai-dispatch 把任务派发给本机已安装的 AI coding CLI。用于调用 Codex、Claude、OpenCode/OpenRouter、Antigravity/Gemini、Grok 做实现、review、调研、模型对照、provider 路由、session resume，或排查 ai-dispatch run。
+description: 通过 ai-dispatch 把任务派发给本机已安装的 AI coding CLI。用于调用 Codex、Claude、OpenCode/OpenRouter、OMP/oh-my-pi、Antigravity/Gemini、Grok 做实现、review、调研、模型对照、provider 路由、session resume，或排查 ai-dispatch run。
 ---
 
 # ai-dispatch
 
 使用当前 skill 目录下的 `scripts/ai-dispatch`，不要调用源码路径。
 
-Claude、Codex、OpenCode、Antigravity/Gemini、Grok、Cursor 在这里都是同级 provider。用户说“找 Claude 看一下”“让 Codex 实现”“叫 Gemini 补个视角”“OpenCode 也 review 一下”“让 Grok 快速试一版”“用 Cursor 里的 Fable 试一版”，都可以用 ai-dispatch 派发。
+Claude、Codex、OpenCode、OMP、Antigravity/Gemini、Grok、Cursor 在这里都是同级 provider。用户说“找 Claude 看一下”“让 Codex 实现”“叫 Gemini 补个视角”“OpenCode 也 review 一下”“用 OMP 的 DeepSeek 试一版”“让 Grok 快速试一版”“用 Cursor 里的 Fable 试一版”，都可以用 ai-dispatch 派发。
 
 ## 调用前
 

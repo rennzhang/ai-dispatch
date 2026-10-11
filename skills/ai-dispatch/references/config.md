@@ -56,7 +56,7 @@ ai-dispatch init --force
 | `claude_transport` | Claude 调用方式：`print`、`pty`、`auto`、`disabled` |
 | `user_facing_summary` | 是否在 send/resume 收口时写出给用户看的卡片。省略或 `false` 为关；`true` 开启。单次可用 `--wrap-up` / `--no-wrap-up` 覆盖 |
 | `models` | 用户已经确认并主动加入的本机模型候选池；key 是短名，value 是按顺序尝试的候选数组 |
-| `models.<name>[].provider` | 真实 provider：`codex`、`claude`、`opencode`、`antigravity`、`grok`、`cursor` |
+| `models.<name>[].provider` | 真实 provider：`codex`、`claude`、`opencode`、`omp`、`antigravity`、`grok`、`cursor` |
 | `models.<name>[].model` | 传给底层 provider CLI 的真实 model id |
 | `models.<name>[].efforts` | 可选。该候选声明支持的档位列表（亦为偏好挑选顺序）。不是默认 effort。省略/空 = 未声明，send 时精确 `--effort` 一律 applied auto |
 | `models.<name>[].fast` | 可选。`true` = 允许（显式传 `--fast` 时才应用，不传永远标准速度）；省略/`false` = 不允许 |
@@ -125,6 +125,31 @@ ai-dispatch send grok "Reply exactly: OK" \
 支持的 key：`grok.max-turns`、`grok.web-search=on|off`、`grok.subagents=on|off`、`grok.approval=always|default`。Grok 默认 `subagents=off`，只有用户明确要求被派发模型使用子代理时才传 `on`。推理档位使用顶层 `--effort`（`auto|none|minimal|low|medium|high|xhigh|max`），不要用已移除的 `grok.effort`。
 
 默认 `grok.approval=always` 会向 Grok CLI 传 `--always-approve`，用于非交互式 dispatch。处理不可信 prompt 或不希望自动批准工具/文件操作时，传 `--provider-opt grok.approval=default`。
+
+## OMP provider opts
+
+`omp` 是 oh-my-pi 的一等 provider（`omp --print --mode json`），不是把 DeepSeek 塞进 codex/OpenCode。
+
+```json
+{
+  "models": {
+    "deepseek": [
+      { "provider": "omp", "model": "opencode-go/deepseek-v4.1-flash", "efforts": ["high", "max", "low"] }
+    ],
+    "deepseek-pro": [
+      { "provider": "omp", "model": "opencode-go/deepseek-v4-pro", "efforts": ["high", "max", "low"] }
+    ]
+  }
+}
+```
+
+```bash
+ai-dispatch send deepseek "…" --effort high --json-result
+ai-dispatch send omp --model opencode-go/deepseek-v4.1-flash "…" --effort max
+```
+
+支持的 key：`omp.approval=always|default`。默认 `always` 传 `--auto-approve`。`--effort` 映射为 omp `--thinking`；`none` 对应 `off`。
+
 
 ## 模型解析顺序
 

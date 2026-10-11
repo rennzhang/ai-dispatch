@@ -23,7 +23,7 @@
 
 ## 当前支持的 provider
 
-ai-dispatch 当前内置支持六类本机 CLI provider：
+ai-dispatch 当前内置支持七类本机 CLI provider：
 
 | Provider | 底层 CLI | 常见用途 |
 | --- | --- | --- |
@@ -33,6 +33,7 @@ ai-dispatch 当前内置支持六类本机 CLI provider：
 | Antigravity/Gemini | `agy` | Gemini / Antigravity 视角 |
 | Grok | `grok` | Grok Build CLI，快速实现、分析、并行探索 |
 | Cursor | `cursor-agent` | Cursor 订阅内 Claude/GPT/Gemini/Kimi/Composer 模型 |
+| OMP (oh-my-pi) | `omp` | DeepSeek 等通过 OMP 配置的模型（如 `opencode-go/deepseek-v4.1-flash`） |
 
 这里的 provider 指被调用的本机 CLI。使用前需要安装相应 CLI，并完成登录或 API 配置；具体可用模型和额度由对应账号与配置决定。Gemini 通过 Antigravity（`agy`）接入。
 
@@ -119,7 +120,7 @@ npx skills add rennzhang/ai-dispatch -g --agent codex
 
 短名必须写进 ~/.ai-dispatch/config.json 的 models。没写进去的 kimi / qwen / gpt5.5 这类词会直接失败。
 
-你也可以直接说 provider 名：`codex`、`claude`、`cursor`、`grok`、`opencode`、`antigravity`（或 `gemini`）。
+你也可以直接说 provider 名：`codex`、`claude`、`cursor`、`grok`、`opencode`、`omp`、`antigravity`（或 `gemini`）。
 
 ai-dispatch 有两个用户态文件：
 
@@ -176,6 +177,8 @@ ai-dispatch 调的是你本机已安装的 AI CLI。某些 provider 可以读写
 Grok provider 为了非交互式执行默认使用 `grok.approval=always`。处理不可信 prompt 或不希望自动批准工具/文件操作时，传 `--provider-opt grok.approval=default`。
 
 Cursor provider 默认只信任工作区（`--trust`），不自动批准工具/文件操作；需要全自动执行时显式传 `--provider-opt cursor.approval=always`。Cursor 模型 ID 自带推理档位后缀（如 `claude-fable-5-thinking-high`），不接收 `--effort` 精确档位；需要其它档位时换用带对应后缀的短名。
+
+OMP provider 默认 `--auto-approve`（`omp.approval=always`）。处理不可信 prompt 或不希望自动批准工具/文件操作时，传 `--provider-opt omp.approval=default`。`--effort` 映射到 omp `--thinking`（`none` → `off`）；能力仍以 config `efforts` 声明为准。
 
 ## 技术文档
 

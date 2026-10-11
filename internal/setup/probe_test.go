@@ -111,3 +111,27 @@ func TestProbeCursorMissingReportsUnavailable(t *testing.T) {
 		t.Fatalf("expected unavailable: %+v", status)
 	}
 }
+
+func TestProbeOMPAvailableAndMissing(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "omp")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho omp v1.0.0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AI_DISPATCH_OMP_BIN", bin)
+	status, ok := ProbeOne("omp", false)
+	if !ok {
+		t.Fatal("omp probe not found")
+	}
+	if !status.Available {
+		t.Fatalf("status=%+v", status)
+	}
+
+	t.Setenv("AI_DISPATCH_OMP_BIN", filepath.Join(t.TempDir(), "missing-omp"))
+	status, ok = ProbeOne("omp", false)
+	if !ok {
+		t.Fatal("omp probe not found")
+	}
+	if status.Available {
+		t.Fatalf("missing omp should be unavailable: %+v", status)
+	}
+}

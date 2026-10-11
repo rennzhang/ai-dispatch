@@ -363,7 +363,7 @@ func TestResolveProviderUsesConfiguredModelAlias(t *testing.T) {
 func TestSupportedTargetsIncludesConfigModelsAndProvidersOnly(t *testing.T) {
 	writeConfig(t, mimoConfig)
 	targets := SupportedTargets()
-	for _, target := range []string{"mimo-pro", "codex", "claude", "cursor", "grok", "gemini"} {
+	for _, target := range []string{"mimo-pro", "codex", "claude", "cursor", "grok", "gemini", "omp"} {
 		if !contains(targets, target) {
 			t.Fatalf("missing %q in targets=%v", target, targets)
 		}
