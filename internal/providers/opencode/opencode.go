@@ -27,27 +27,28 @@ type Provider struct{}
 
 func (Provider) Name() string { return "opencode" }
 
-func (Provider) ResolveEffort(ctx context.Context, req providers.EffortRequest) providers.EffortResolution {
-	requested := contract.NormalizeEffort(req.Requested)
-	if requested == contract.EffortAuto {
-		return providers.EffortAuto(requested, req.Model)
-	}
-	variants, ok, reason := lookupOpenCodeVariants(ctx, req.Model)
-	if !ok {
-		if reason == "" {
-			reason = fmt.Sprintf("effort %s could not be confirmed for opencode/%s; applied auto", requested, effortModelLabel(req.Model))
-		}
-		return providers.EffortFallback(requested, req.Model, reason)
-	}
-	if _, found := variants[string(requested)]; found {
-		return providers.EffortExact(requested, req.Model)
-	}
-	return providers.EffortFallback(requested, req.Model,
-		fmt.Sprintf("effort %s is not supported by opencode/%s; applied auto", requested, effortModelLabel(req.Model)))
+func (Provider) ResolveEffort(_ context.Context, req providers.EffortRequest) providers.EffortResolution {
+	// Config declaration is execution authority. Live opencode models --verbose
+	// remains available as SuggestEffortLevels for init/detect-and-suggest.
+	return providers.ResolveEffortFromDeclared(req, "opencode")
 }
 
 func (Provider) ResolveFast(_ context.Context, req providers.FastRequest) providers.FastResolution {
-	return providers.FastFallback(req.Requested, "opencode", req.Model)
+	return providers.ResolveFastFromDeclared(req, "opencode")
+}
+
+// SuggestEffortLevels queries opencode catalog variants as an optional init hint.
+// Execution never consults this; config ModelRoute.efforts is authority.
+func SuggestEffortLevels(ctx context.Context, model string) []string {
+	variants, ok, _ := lookupOpenCodeVariants(ctx, model)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(variants))
+	for key := range variants {
+		out = append(out, key)
+	}
+	return out
 }
 
 func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {

@@ -10,7 +10,7 @@ import (
 
 // FirstRunHint is the message injected into the first ProviderResult after a
 // config setup, so the calling Agent knows to tell the user about preferences.
-const FirstRunHint = "本次是首次使用 dispatch skill。完成后请提醒用户可以在 ~/.ai-dispatch/preferences.md 中根据自己的喜好设定模型调用偏好。"
+const FirstRunHint = "本次是首次使用 dispatch skill。完成后请提醒用户：1) 在 ~/.ai-dispatch/preferences.md 设定模型调用偏好；2) 更新 config.json models 候选池时确认是否为各候选配置 efforts（档位能力与偏好顺序）和 fast；未配置则 send 时 effort/fast 仅走 auto/标准速度。"
 
 // Summary captures the initialization details for surfacing to the calling
 // Agent on the first run. It is only populated when FirstRun is true.

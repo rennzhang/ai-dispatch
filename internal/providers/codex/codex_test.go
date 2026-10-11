@@ -60,53 +60,51 @@ func TestBuildCodexArgsFastUsesPriorityServiceTier(t *testing.T) {
 
 func TestResolveCodexEffort(t *testing.T) {
 	p := Provider{}
-	auto := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "gpt-5.6", Requested: contract.EffortAuto})
+	declared := []string{"low", "medium", "high", "xhigh", "max"}
+	auto := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "gpt-5.6", Requested: contract.EffortAuto, DeclaredEfforts: declared})
 	if auto.Applied != contract.EffortAuto || auto.Fallback {
 		t.Fatalf("auto=%+v", auto)
 	}
-	exact := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "gpt-5.6", Requested: contract.EffortXHigh})
+	exact := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "gpt-5.6", Requested: contract.EffortXHigh, DeclaredEfforts: declared})
 	if exact.Applied != contract.EffortXHigh || exact.Fallback {
 		t.Fatalf("exact=%+v", exact)
 	}
 	for _, model := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
 		for _, level := range []contract.Effort{contract.EffortLow, contract.EffortMedium, contract.EffortHigh, contract.EffortXHigh, contract.EffortMax} {
-			got := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: model, Requested: level})
+			got := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: model, Requested: level, DeclaredEfforts: declared})
 			if got.Applied != level || got.Fallback {
 				t.Fatalf("model %s exact %s=%+v", model, level, got)
 			}
 		}
 	}
-	gpt55Max := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "gpt-5.5", Requested: contract.EffortMax})
-	if gpt55Max.Applied != contract.EffortAuto || !gpt55Max.Fallback {
-		t.Fatalf("gpt-5.5 max must fall back to auto: %+v", gpt55Max)
+	undeclared := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "gpt-5.6-sol", Requested: contract.EffortHigh})
+	if undeclared.Applied != contract.EffortAuto || !undeclared.Fallback || !strings.Contains(undeclared.Reason, "not declared in config") {
+		t.Fatalf("undeclared must fall back: %+v", undeclared)
 	}
-	forged := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "foo-gpt5-model", Requested: contract.EffortHigh})
-	if forged.Applied != contract.EffortAuto || !forged.Fallback {
-		t.Fatalf("forged gpt5 id must fall back to auto: %+v", forged)
+	outside := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "gpt-5.6-sol", Requested: contract.EffortNone, DeclaredEfforts: declared})
+	if outside.Applied != contract.EffortAuto || !outside.Fallback {
+		t.Fatalf("outside list must fall back: %+v", outside)
 	}
-	for _, level := range []contract.Effort{contract.EffortNone, contract.EffortMinimal} {
-		got := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "gpt-5.6-sol", Requested: level})
-		if got.Applied != contract.EffortAuto || !got.Fallback {
-			t.Fatalf("lowest level %s must fall back to auto: %+v", level, got)
-		}
-	}
-	unknown := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "o3", Requested: contract.EffortHigh})
-	if unknown.Applied != contract.EffortAuto || !unknown.Fallback {
-		t.Fatalf("unknown=%+v", unknown)
+	if got := SuggestEffortLevels("gpt-5.6-sol"); len(got) == 0 {
+		t.Fatal("suggest hint should still list known gpt-5.6 efforts")
 	}
 }
 
 func TestResolveCodexFast(t *testing.T) {
 	p := Provider{}
+	yes := true
 	for _, model := range []string{"gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
-		got := p.ResolveFast(context.Background(), providers.FastRequest{Model: model, Requested: true})
+		got := p.ResolveFast(context.Background(), providers.FastRequest{Model: model, Requested: true, DeclaredFast: &yes})
 		if !got.Applied || got.Fallback {
 			t.Fatalf("model %s fast=%+v", model, got)
 		}
 	}
-	unsupported := p.ResolveFast(context.Background(), providers.FastRequest{Model: "o3", Requested: true})
-	if unsupported.Applied || !unsupported.Fallback || !strings.Contains(unsupported.Reason, "standard speed") {
-		t.Fatalf("unsupported=%+v", unsupported)
+	undeclared := p.ResolveFast(context.Background(), providers.FastRequest{Model: "gpt-5.6-sol", Requested: true})
+	if undeclared.Applied || !undeclared.Fallback || !strings.Contains(undeclared.Reason, "does not declare fast") {
+		t.Fatalf("undeclared=%+v", undeclared)
+	}
+	if !SuggestFast("gpt-5.6-luna") {
+		t.Fatal("suggest hint should still mark known gpt-5.6 fast")
 	}
 }
 

@@ -2,6 +2,8 @@ package providers
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/rennzhang/ai-dispatch/internal/contract"
 	"github.com/rennzhang/ai-dispatch/internal/routing"
@@ -28,6 +30,9 @@ type EffortRequest struct {
 	Model           string
 	Requested       contract.Effort
 	ProviderOptions map[string]string
+	// DeclaredEfforts comes from config ModelRoute.efforts for this candidate.
+	// Empty means undeclared: explicit --effort falls back to auto.
+	DeclaredEfforts []string
 }
 
 // EffortResolution is the exact effort decision for one candidate before Build.
@@ -45,6 +50,9 @@ type EffortResolution struct {
 type FastRequest struct {
 	Model     string
 	Requested bool
+	// DeclaredFast comes from config ModelRoute.fast. nil means undeclared:
+	// --fast falls back to standard speed.
+	DeclaredFast *bool
 }
 
 // FastResolution records whether a provider can honor the shared --fast intent.
@@ -117,4 +125,58 @@ func FastUnavailable(requested bool, reason string) FastResolution {
 		return FastStandard(false)
 	}
 	return FastResolution{Requested: true, Fallback: true, Reason: reason}
+}
+
+// ResolveEffortFromDeclared uses config ModelRoute.efforts as execution authority.
+// Missing/empty declaration means explicit levels fall back to auto. Membership is
+// exact; there is no nearest-neighbor clamp.
+func ResolveEffortFromDeclared(req EffortRequest, provider string) EffortResolution {
+	requested := contract.NormalizeEffort(req.Requested)
+	if requested == contract.EffortAuto {
+		return EffortAuto(requested, req.Model)
+	}
+	label := strings.TrimSpace(req.Model)
+	if label == "" {
+		label = "default"
+	}
+	if len(req.DeclaredEfforts) == 0 {
+		return EffortFallback(requested, req.Model,
+			fmt.Sprintf("effort %s is not declared in config for %s/%s; applied auto", requested, provider, label))
+	}
+	if containsDeclaredEffort(req.DeclaredEfforts, requested) {
+		return EffortExact(requested, req.Model)
+	}
+	return EffortFallback(requested, req.Model,
+		fmt.Sprintf("effort %s is not in declared efforts [%s] for %s/%s; applied auto",
+			requested, strings.Join(req.DeclaredEfforts, ","), provider, label))
+}
+
+// ResolveFastFromDeclared uses config ModelRoute.fast as execution authority.
+func ResolveFastFromDeclared(req FastRequest, provider string) FastResolution {
+	if !req.Requested {
+		return FastStandard(false)
+	}
+	label := strings.TrimSpace(req.Model)
+	if label == "" {
+		label = "default"
+	}
+	if req.DeclaredFast == nil {
+		return FastUnavailable(true,
+			fmt.Sprintf("%s/%s does not declare fast in config; applied standard speed", provider, label))
+	}
+	if *req.DeclaredFast {
+		return FastExact(true)
+	}
+	return FastUnavailable(true,
+		fmt.Sprintf("%s/%s declares fast=false; applied standard speed", provider, label))
+}
+
+func containsDeclaredEffort(declared []string, wanted contract.Effort) bool {
+	want := string(contract.NormalizeEffort(wanted))
+	for _, item := range declared {
+		if strings.TrimSpace(item) == want {
+			return true
+		}
+	}
+	return false
 }

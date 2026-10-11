@@ -29,6 +29,7 @@ auto | none | minimal | low | medium | high | xhigh | max
 5. 切换到 `auto` 必须出现在结构化结果中，不能静默发生。
 6. 档位解析在 provider 进程启动前完成；不允许先执行失败，再用 `auto` 重跑同一任务。
 7. 原始 `requested_effort` 在路由候选之间保持不变，每个候选根据自己的能力独立解析。
+8. **config `models[].efforts` 是执行能力真源**（亦为偏好挑选顺序，不是默认值）。未声明则精确档位一律 applied auto。Provider 内 hardcoded / live query 列表仅作 init/detect 提示，须用户确认后写入 config。
 
 `auto` 不是模型真实档位。它只说明 ai-dispatch 没有施加档位覆盖。因此结果字段使用 `applied_effort`，不使用容易误导的 `effective_effort`。
 

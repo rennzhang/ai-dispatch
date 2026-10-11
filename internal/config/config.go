@@ -28,8 +28,15 @@ func (c Config) UserFacingSummaryEnabled() bool {
 type ModelsConfig map[string][]ModelRoute
 
 type ModelRoute struct {
-	Provider string `json:"provider"`
-	Model    string `json:"model,omitempty"`
+	Provider string   `json:"provider"`
+	Model    string   `json:"model,omitempty"`
+	// Efforts is the declared capability list and preference order for this
+	// candidate. It is not a default effort value. Missing/empty means
+	// undeclared: send applies auto only (provider/CLI default).
+	Efforts []string `json:"efforts,omitempty"`
+	// Fast declares whether --fast may be applied for this candidate.
+	// nil means undeclared (do not apply --fast).
+	Fast *bool `json:"fast,omitempty"`
 }
 
 // ProviderStatus records runtime availability of a single provider binary.
@@ -245,7 +252,24 @@ func normalize(cfg Config) (Config, error) {
 			if strings.TrimSpace(route.Provider) == "" {
 				return Config{}, fmt.Errorf("models.%s[%d].provider is required", key, i)
 			}
+			for j, effort := range route.Efforts {
+				normalized := strings.TrimSpace(effort)
+				if normalized == "" {
+					return Config{}, fmt.Errorf("models.%s[%d].efforts[%d] is empty", key, i, j)
+				}
+				if normalized == "auto" {
+					return Config{}, fmt.Errorf("models.%s[%d].efforts must not include auto; omit efforts for undeclared/auto-only", key, i)
+				}
+				switch normalized {
+				case "none", "minimal", "low", "medium", "high", "xhigh", "max":
+				default:
+					return Config{}, fmt.Errorf("models.%s[%d].efforts[%d] unsupported effort %q; want none|minimal|low|medium|high|xhigh|max", key, i, j, effort)
+				}
+				route.Efforts[j] = normalized
+			}
+			routes[i] = route
 		}
+		cfg.Models[key] = routes
 	}
 	return cfg, nil
 }

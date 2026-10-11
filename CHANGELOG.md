@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## v0.8.0
+
+- Make config `models[].efforts` and `models[].fast` the execution capability source of truth for `--effort` / `--fast`.
+- Missing or empty `efforts` means undeclared: explicit `--effort` applies auto with a clear `effort_fallback_reason` (no nearest-neighbor clamp).
+- `fast: true` is an allow-list, never a default: without `--fast`, `applied_fast` is always false. With `--fast`, it must be declared `true` to apply; undeclared/`false` keep standard speed with `fast_fallback_reason`.
+- Demote Codex/Grok hardcoded allowlists (and OpenCode live catalog queries) from send-time authority to optional init/detect-and-suggest hints.
+- `models resolve --format json` exposes per-candidate declared `efforts` and `fast`.
+- Skill/config guidance: ask before configuring efforts/fast when updating the model pool; first-run hint mentions confirming them.
+- `efforts` is preference order within the declared list, not a default effort value.
+
 ## v0.7.4
 
 - Keep `user_facing_summary` as a line-broken card: `[ai-dispatch result|degraded|failed]`, then Target / Duration / Session ID; add Degraded or Failed lines only when needed.

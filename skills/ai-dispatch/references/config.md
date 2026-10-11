@@ -29,7 +29,15 @@ ai-dispatch init --force
       { "provider": "opencode", "model": "opencode/mimo-v2.5-free" }
     ],
     "gpt5.5": [
-      { "provider": "codex", "model": "gpt-5.5" }
+      { "provider": "codex", "model": "gpt-5.5", "fast": true }
+    ],
+    "gpt6.1-sol": [
+      {
+        "provider": "codex",
+        "model": "gpt-5.6-sol",
+        "efforts": ["high", "xhigh", "medium", "low", "max"],
+        "fast": true
+      }
     ]
   },
   "providers": {
@@ -50,6 +58,8 @@ ai-dispatch init --force
 | `models` | 用户已经确认并主动加入的本机模型候选池；key 是短名，value 是按顺序尝试的候选数组 |
 | `models.<name>[].provider` | 真实 provider：`codex`、`claude`、`opencode`、`antigravity`、`grok`、`cursor` |
 | `models.<name>[].model` | 传给底层 provider CLI 的真实 model id |
+| `models.<name>[].efforts` | 可选。该候选声明支持的档位列表（亦为偏好挑选顺序）。不是默认 effort。省略/空 = 未声明，send 时精确 `--effort` 一律 applied auto |
+| `models.<name>[].fast` | 可选。`true` = 允许（显式传 `--fast` 时才应用，不传永远标准速度）；省略/`false` = 不允许 |
 | `providers` | provider CLI 诊断摘要，由 `init` 或 `providers scan` 更新 |
 | `providers.<name>.available` | provider CLI 是否看起来可执行 |
 | `providers.<name>.version` | provider CLI 版本 |
@@ -81,7 +91,14 @@ ai-dispatch config show
 
 收到 `SIGINT`、`SIGTERM` 或 `SIGHUP` 时，dispatch 会终止当前 provider 进程树、停止候选降级，并统一返回 canceled 结果（`exit_code=130`、`next_action=done`）。这里的 130 是 ai-dispatch 的“调用已取消”契约，不用于区分信号来源。
 
-顶层 `--fast` 对所有 provider 都是合法输入。当前 Codex GPT-5.5/5.6 target 会应用 priority service tier；其他 provider 暂时显式回退到标准速度，并通过 `requested_fast`、`applied_fast`、`fast_fallback_reason` 说明实际行为。fast 不是 `config.json` 默认值，也不改变候选顺序。
+顶层 `--effort` / `--fast` 对所有 provider 都是合法输入，但**能力真源是各候选的 config 声明**：
+
+- `efforts`：声明可精确应用的档位；列表顺序供偏好挑选。未声明或不在列表内 → applied `auto` + `effort_fallback_reason`。
+- `fast: true`：只是允许；仅在显式 `--fast` 时应用加速，不传 `--fast` 一律标准速度；未声明或 `false` → 标准速度 + `fast_fallback_reason`。
+- 不要把 hardcoded provider 提示列表当作执行权威；它们只可用于 init / detect-and-suggest，且须经用户确认后再写入 config。
+- 新增/更新/移除 models 候选时，询问用户是否配置 `efforts`/`fast`；未配置保持 auto。
+
+`models resolve <target> --format json` 会暴露各候选已声明的 `efforts` 与 `fast`。
 
 ## Grok provider opts
 

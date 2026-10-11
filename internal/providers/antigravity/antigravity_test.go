@@ -84,19 +84,23 @@ func TestResolveAntigravityEffortSameFamilyOnly(t *testing.T) {
 	if auto.Applied != contract.EffortAuto || auto.AppliedModel != defaultFlashLabel || auto.Fallback {
 		t.Fatalf("auto=%+v", auto)
 	}
-	exact := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "flash", Requested: contract.EffortHigh})
+	undeclared := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "flash", Requested: contract.EffortHigh})
+	if undeclared.Applied != contract.EffortAuto || !undeclared.Fallback || !strings.Contains(undeclared.Reason, "not declared in config") {
+		t.Fatalf("undeclared=%+v", undeclared)
+	}
+	exact := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "flash", Requested: contract.EffortHigh, DeclaredEfforts: []string{"low", "medium", "high"}})
 	if exact.Applied != contract.EffortHigh || exact.AppliedModel != "Gemini 3.5 Flash (High)" || exact.Fallback {
 		t.Fatalf("exact=%+v", exact)
 	}
-	missing := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "pro", Requested: contract.EffortMedium})
+	missing := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "pro", Requested: contract.EffortMedium, DeclaredEfforts: []string{"low", "medium", "high"}})
 	if missing.Applied != contract.EffortAuto || !missing.Fallback || missing.AppliedModel != defaultProLabel {
 		t.Fatalf("missing medium on pro family=%+v", missing)
 	}
-	noModel := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "", Requested: contract.EffortHigh})
+	noModel := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "", Requested: contract.EffortHigh, DeclaredEfforts: []string{"low", "medium", "high"}})
 	if noModel.Applied != contract.EffortAuto || !noModel.Fallback || noModel.AppliedModel != "" {
 		t.Fatalf("no model=%+v", noModel)
 	}
-	xhigh := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "flash", Requested: contract.EffortXHigh})
+	xhigh := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "flash", Requested: contract.EffortXHigh, DeclaredEfforts: []string{"low", "medium", "high"}})
 	if xhigh.Applied != contract.EffortAuto || !xhigh.Fallback || xhigh.AppliedModel != defaultFlashLabel {
 		t.Fatalf("xhigh=%+v", xhigh)
 	}
@@ -112,7 +116,7 @@ func TestResolveAntigravityEffortQueryFailure(t *testing.T) {
 		return nil, errors.New("agy models failed")
 	}
 	t.Cleanup(func() { queryAgyModels = defaultQueryAgyModels })
-	res := Provider{}.ResolveEffort(context.Background(), providers.EffortRequest{Model: "flash", Requested: contract.EffortLow})
+	res := Provider{}.ResolveEffort(context.Background(), providers.EffortRequest{Model: "flash", Requested: contract.EffortLow, DeclaredEfforts: []string{"low", "medium", "high"}})
 	if res.Applied != contract.EffortAuto || !res.Fallback || res.AppliedModel != defaultFlashLabel || !strings.Contains(res.Reason, "agy models failed") {
 		t.Fatalf("res=%+v", res)
 	}
@@ -130,6 +134,7 @@ func TestResolveAntigravityCustomBinFallsBackWithoutQuery(t *testing.T) {
 	res := Provider{}.ResolveEffort(context.Background(), providers.EffortRequest{
 		Model:           "flash",
 		Requested:       contract.EffortHigh,
+		DeclaredEfforts: []string{"low", "medium", "high"},
 		ProviderOptions: map[string]string{"bin": "/custom/agy"},
 	})
 	if res.Applied != contract.EffortAuto || !res.Fallback || res.AppliedModel != defaultFlashLabel {

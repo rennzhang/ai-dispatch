@@ -77,7 +77,7 @@ provider adapter 不直接读取 CLI argv。它只通过 `providers.BuildRequest
 - `StreamProgress` 由 dispatch/runtime 的 stdout/stderr hook 处理，adapter 不处理。
 - `TimeoutSeconds` 和 `ActivityTimeoutSeconds` 由 runtime 统一执行；adapter 只有在底层 CLI 也需要内部 timeout 参数时才读取。
 - `Effort` 由 CLI 校验后在 `ExecuteWithOptions` 入口规范化为空值=`auto`；每个候选执行前调用 `ResolveEffort`，再把 **已解析** 的 `Applied` 写入 `BuildRequest.Effort`。adapter 的 `Build` 不得再决定 effort 降级。
-- effort 能力真源必须 provider-local（已验证模型规则或实时 CLI 查询）。不要新增全局 capability package，也不要把 effort 默认值写进 `config.json`。
+- effort/fast 执行能力真源是该候选的 config 声明（`efforts` / `fast`）。Provider 内提示列表或 live query 仅用于 init/detect-and-suggest，不能在 send 路径绕过 undeclared。不要把 effort 默认值写进 config（`efforts` 是能力列表与偏好顺序，不是默认档位）。
 - `Fast` 是所有 provider 都接受的统一意图。每个候选执行前调用 `ResolveFast`；只有确认支持时才把 `BuildRequest.Fast` 设为 true，否则以标准速度执行并显式记录 fallback reason。
 
 ## Routing Target

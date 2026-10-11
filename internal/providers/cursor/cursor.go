@@ -32,7 +32,7 @@ func (Provider) ResolveEffort(_ context.Context, req providers.EffortRequest) pr
 }
 
 func (Provider) ResolveFast(_ context.Context, req providers.FastRequest) providers.FastResolution {
-	return providers.FastFallback(req.Requested, "cursor", req.Model)
+	return providers.ResolveFastFromDeclared(req, "cursor")
 }
 
 func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {

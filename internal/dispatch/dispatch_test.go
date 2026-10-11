@@ -761,16 +761,18 @@ func TestEffortFallbackDoesNotSetDegradedOrRetry(t *testing.T) {
 }
 
 func TestAllProvidersResolveSharedFastIntent(t *testing.T) {
+	yes := true
 	tests := []struct {
 		provider string
 		model    string
+		declared *bool
 		applied  bool
 	}{
-		{provider: "codex", model: "gpt-5.6-luna", applied: true},
-		{provider: "claude", model: "claude-haiku-4-5", applied: false},
-		{provider: "opencode", model: "openrouter/xiaomi/mimo-v2.5-pro", applied: false},
-		{provider: "grok", model: "grok-4.5", applied: false},
-		{provider: "antigravity", model: "gemini-3-flash", applied: false},
+		{provider: "codex", model: "gpt-5.6-luna", declared: &yes, applied: true},
+		{provider: "claude", model: "claude-haiku-4-5", declared: nil, applied: false},
+		{provider: "opencode", model: "openrouter/xiaomi/mimo-v2.5-pro", declared: nil, applied: false},
+		{provider: "grok", model: "grok-4.5", declared: nil, applied: false},
+		{provider: "antigravity", model: "gemini-3-flash", declared: nil, applied: false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.provider, func(t *testing.T) {
@@ -778,7 +780,7 @@ func TestAllProvidersResolveSharedFastIntent(t *testing.T) {
 			if !ok {
 				t.Fatalf("provider %q not registered", tc.provider)
 			}
-			got := provider.ResolveFast(context.Background(), providers.FastRequest{Model: tc.model, Requested: true})
+			got := provider.ResolveFast(context.Background(), providers.FastRequest{Model: tc.model, Requested: true, DeclaredFast: tc.declared})
 			if !got.Requested || got.Applied != tc.applied {
 				t.Fatalf("resolution=%+v", got)
 			}
@@ -845,13 +847,14 @@ func TestFastFallbackDoesNotSetDegradedOrRetry(t *testing.T) {
 }
 
 func TestFastRequestedSurvivesCandidateFallback(t *testing.T) {
+	yes := true
 	target := routing.DispatchTarget{
 		Requested: "multi",
 		Provider:  "grok",
 		Model:     "grok-4.5",
 		Candidates: []routing.RouteCandidate{
 			{Provider: "grok", Model: "grok-4.5"},
-			{Provider: "codex", Model: "gpt-5.6-luna"},
+			{Provider: "codex", Model: "gpt-5.6-luna", Fast: &yes},
 		},
 	}
 	result := executeCandidatesWith(context.Background(), contract.DispatchRequest{
@@ -863,7 +866,7 @@ func TestFastRequestedSurvivesCandidateFallback(t *testing.T) {
 			if !ok {
 				t.Fatalf("provider %q not registered", candidate.Provider)
 			}
-			resolution := provider.ResolveFast(ctx, providers.FastRequest{Model: candidate.Model, Requested: req.Fast})
+			resolution := provider.ResolveFast(ctx, providers.FastRequest{Model: candidate.Model, Requested: req.Fast, DeclaredFast: candidate.Fast})
 			if candidate.Provider == "grok" {
 				failed := contract.ErrorResult(contract.StatusQuota, contract.FailureQuota, "quota", 1)
 				ensureRouteMetadata(&failed, candidate, 1)
@@ -898,12 +901,21 @@ func TestFastRequestedSurvivesCandidateFallback(t *testing.T) {
 }
 
 func TestSupportsFastPrimaryCandidate(t *testing.T) {
+	yes := true
 	if !SupportsFast(context.Background(), routing.DispatchTarget{
 		Requested: "gpt5.6-luna",
 		Provider:  "codex",
 		Model:     "gpt-5.6-luna",
+		Fast:      &yes,
 	}) {
-		t.Fatal("codex luna must support fast")
+		t.Fatal("codex luna with declared fast must support fast")
+	}
+	if SupportsFast(context.Background(), routing.DispatchTarget{
+		Requested: "gpt5.6-luna",
+		Provider:  "codex",
+		Model:     "gpt-5.6-luna",
+	}) {
+		t.Fatal("undeclared fast must not support fast")
 	}
 	if SupportsFast(context.Background(), routing.DispatchTarget{
 		Requested: "grok",
@@ -918,7 +930,7 @@ func TestSupportsFastPrimaryCandidate(t *testing.T) {
 		Model:     "grok-4.5",
 		Candidates: []routing.RouteCandidate{
 			{Provider: "grok", Model: "grok-4.5"},
-			{Provider: "codex", Model: "gpt-5.6-luna"},
+			{Provider: "codex", Model: "gpt-5.6-luna", Fast: &yes},
 		},
 	}) {
 		t.Fatal("SupportsFast must describe the primary candidate only")
@@ -932,7 +944,7 @@ func TestEffortRequestedSurvivesCandidateFallback(t *testing.T) {
 		Model:     "grok-composer-2.5-fast",
 		Candidates: []routing.RouteCandidate{
 			{Provider: "grok", Model: "grok-composer-2.5-fast"},
-			{Provider: "grok", Model: "grok-4.5"},
+			{Provider: "grok", Model: "grok-4.5", Efforts: []string{"low", "medium", "high"}},
 		},
 	}
 	var seen []string
@@ -946,7 +958,7 @@ func TestEffortRequestedSurvivesCandidateFallback(t *testing.T) {
 			}
 			seen = append(seen, candidate.Model)
 			p := grok.Provider{}
-			resolution := p.ResolveEffort(ctx, providers.EffortRequest{Model: candidate.Model, Requested: req.Effort})
+			resolution := p.ResolveEffort(ctx, providers.EffortRequest{Model: candidate.Model, Requested: req.Effort, DeclaredEfforts: candidate.Efforts})
 			buildTarget := candidate
 			buildTarget.Model = resolution.AppliedModel
 			if candidate.Model == "grok-composer-2.5-fast" {

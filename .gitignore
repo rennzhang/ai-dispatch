@@ -17,3 +17,4 @@ dist/
 build/
 coverage/
 npm/ai-dispatch/bin/native/
+dist-local/

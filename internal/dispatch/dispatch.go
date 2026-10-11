@@ -234,11 +234,13 @@ func executeTarget(baseCtx context.Context, req contract.DispatchRequest, target
 		Model:           target.Model,
 		Requested:       req.Effort,
 		ProviderOptions: req.ProviderOpts[target.Provider],
+		DeclaredEfforts: target.Efforts,
 	})
 	cancelEffort()
 	fastResolution := p.ResolveFast(baseCtx, providers.FastRequest{
-		Model:     target.Model,
-		Requested: req.Fast,
+		Model:        target.Model,
+		Requested:    req.Fast,
+		DeclaredFast: target.Fast,
 	})
 
 	buildTarget := target
@@ -585,8 +587,8 @@ func providerFor(name string) (providers.Provider, bool) {
 	}
 }
 
-// SupportsFast reports whether the primary candidate for target can honor --fast.
-// Capability is resolved through the provider adapter; callers must not invent a table.
+// SupportsFast reports whether the primary candidate declares fast in config.
+// Capability comes from ModelRoute.fast via the provider ResolveFast path.
 func SupportsFast(ctx context.Context, target routing.DispatchTarget) bool {
 	if ctx == nil {
 		ctx = context.Background()
@@ -600,8 +602,9 @@ func SupportsFast(ctx context.Context, target routing.DispatchTarget) bool {
 		return false
 	}
 	return p.ResolveFast(ctx, providers.FastRequest{
-		Model:     primary.Model,
-		Requested: true,
+		Model:        primary.Model,
+		Requested:    true,
+		DeclaredFast: primary.Fast,
 	}).Applied
 }
 

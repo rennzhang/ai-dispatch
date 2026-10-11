@@ -155,7 +155,7 @@ ai-dispatch send gpt5.6 "implement the fix" --effort xhigh --json-result
 
 Codex 短名（gpt5.6-sol 等）需要写进 config.json。裸 send codex 使用 Codex CLI 自己的默认模型。
 
-合法值：`auto | none | minimal | low | medium | high | xhigh | max`。省略或 `auto` 表示不覆盖各 CLI 默认。只有当前 provider/模型确认支持的精确档位才会传递；否则回到 `auto`，结果里会带 `requested_effort` / `applied_effort` / `effort_fallback_reason`，不会静默降到相邻档。详见 [Reasoning Effort 设计](docs/reasoning-effort-design.md)。
+合法值：`auto | none | minimal | low | medium | high | xhigh | max`。省略或 `auto` 表示不覆盖各 CLI 默认。精确档位只在该候选 config `efforts` 声明列表内传递；未声明或不在列表内回到 `auto`，结果里会带 `requested_effort` / `applied_effort` / `effort_fallback_reason`，不会静默降到相邻档。详见 [Reasoning Effort 设计](docs/reasoning-effort-design.md)。
 
 ## Fast mode
 

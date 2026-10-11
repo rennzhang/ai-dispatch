@@ -115,21 +115,24 @@ func TestBuildAutoEffortOmitsReasoningEffort(t *testing.T) {
 
 func TestResolveGrokEffort(t *testing.T) {
 	p := Provider{}
-	exact := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "grok-4.5", Requested: contract.EffortHigh})
+	declared := []string{"low", "medium", "high"}
+	exact := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "grok-4.5", Requested: contract.EffortHigh, DeclaredEfforts: declared})
 	if exact.Applied != contract.EffortHigh || exact.Fallback {
 		t.Fatalf("exact=%+v", exact)
 	}
-	composer := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "grok-composer-2.5-fast", Requested: contract.EffortLow})
-	if composer.Applied != contract.EffortAuto || !composer.Fallback {
-		t.Fatalf("composer=%+v", composer)
+	undeclared := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "grok-4.5", Requested: contract.EffortHigh})
+	if undeclared.Applied != contract.EffortAuto || !undeclared.Fallback || !strings.Contains(undeclared.Reason, "not declared in config") {
+		t.Fatalf("undeclared=%+v", undeclared)
 	}
-	multi := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "grok-4.5-multi-agent", Requested: contract.EffortMedium})
-	if multi.Applied != contract.EffortAuto || !multi.Fallback {
-		t.Fatalf("multi=%+v", multi)
-	}
-	xhigh := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "grok-4.5", Requested: contract.EffortXHigh})
+	xhigh := p.ResolveEffort(context.Background(), providers.EffortRequest{Model: "grok-4.5", Requested: contract.EffortXHigh, DeclaredEfforts: declared})
 	if xhigh.Applied != contract.EffortAuto || !xhigh.Fallback {
-		t.Fatalf("xhigh=%+v", xhigh)
+		t.Fatalf("xhigh outside declared list=%+v", xhigh)
+	}
+	if got := SuggestEffortLevels("grok-4.5"); len(got) != 3 {
+		t.Fatalf("suggest=%v", got)
+	}
+	if got := SuggestEffortLevels("grok-4.5-multi-agent"); got != nil {
+		t.Fatalf("multi-agent must not be suggested: %v", got)
 	}
 }
 

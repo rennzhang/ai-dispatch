@@ -18,25 +18,11 @@ type Provider struct{}
 func (Provider) Name() string { return "codex" }
 
 func (Provider) ResolveEffort(_ context.Context, req providers.EffortRequest) providers.EffortResolution {
-	requested := contract.NormalizeEffort(req.Requested)
-	if requested == contract.EffortAuto {
-		return providers.EffortAuto(requested, req.Model)
-	}
-	if codexSupportsEffort(req.Model, requested) {
-		return providers.EffortExact(requested, req.Model)
-	}
-	return providers.EffortFallback(requested, req.Model,
-		fmt.Sprintf("effort %s is not supported by codex/%s; applied auto", requested, effortModelLabel(req.Model)))
+	return providers.ResolveEffortFromDeclared(req, "codex")
 }
 
 func (Provider) ResolveFast(_ context.Context, req providers.FastRequest) providers.FastResolution {
-	if !req.Requested {
-		return providers.FastStandard(false)
-	}
-	if codexSupportsFast(req.Model) {
-		return providers.FastExact(true)
-	}
-	return providers.FastFallback(true, "codex", req.Model)
+	return providers.ResolveFastFromDeclared(req, "codex")
 }
 
 func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
@@ -185,34 +171,24 @@ func routeLabel(provider string, model string) string {
 	return provider + ":" + model
 }
 
-func codexSupportsEffort(model string, effort contract.Effort) bool {
-	// Exact allowlist only. Unknown/unverified models (including other GPT-5.x
-	// variants) must fall back to auto; never guess via contains/prefix matching.
-	switch effort {
-	case contract.EffortLow, contract.EffortMedium, contract.EffortHigh, contract.EffortXHigh, contract.EffortMax:
-	default:
-		return false
-	}
+// SuggestEffortLevels returns optional init/detect hints for known Codex models.
+// Execution never consults this list; config ModelRoute.efforts is authority.
+func SuggestEffortLevels(model string) []string {
 	switch strings.ToLower(strings.TrimSpace(model)) {
 	case "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
-		return true
+		return []string{"low", "medium", "high", "xhigh", "max"}
 	default:
-		return false
+		return nil
 	}
 }
 
-func codexSupportsFast(model string) bool {
+// SuggestFast returns an optional init/detect hint for known Codex models.
+// Execution never consults this; config ModelRoute.fast is authority.
+func SuggestFast(model string) bool {
 	switch strings.ToLower(strings.TrimSpace(model)) {
 	case "gpt-5.5", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
 		return true
 	default:
 		return false
 	}
-}
-
-func effortModelLabel(model string) string {
-	if strings.TrimSpace(model) == "" {
-		return "default"
-	}
-	return model
 }

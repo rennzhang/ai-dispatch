@@ -1,14 +1,12 @@
 package cli
 
 import (
-	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"strings"
 
-	"github.com/rennzhang/ai-dispatch/internal/dispatch"
 	"github.com/rennzhang/ai-dispatch/internal/routing"
 )
 
@@ -72,13 +70,18 @@ func modelsResolve(argv []string, stdout io.Writer, stderr io.Writer) int {
 	if err != nil {
 		return emitCLIError(stdout, stderr, *format == "json", err.Error(), 2)
 	}
-	// Enrich with a read-only capability snapshot; do not persist fast into routing types.
+	// Expose declared config capabilities. Top-level fast is true only when the
+	// primary candidate declares fast=true; undeclared/false both report false.
 	payload := struct {
 		routing.DispatchTarget
 		Fast bool `json:"fast"`
 	}{
 		DispatchTarget: target,
-		Fast:           dispatch.SupportsFast(context.Background(), target),
+		Fast:           declaredFast(target.Fast),
 	}
 	return writeJSON(stdout, payload, 0)
+}
+
+func declaredFast(value *bool) bool {
+	return value != nil && *value
 }

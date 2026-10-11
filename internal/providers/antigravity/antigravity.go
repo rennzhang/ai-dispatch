@@ -33,19 +33,24 @@ func (Provider) ResolveEffort(ctx context.Context, req providers.EffortRequest) 
 	requested := contract.NormalizeEffort(req.Requested)
 	appliedModel, baseOK := resolveAgyAppliedModel(req.Model)
 
+	if requested == contract.EffortAuto {
+		return providers.EffortAuto(requested, appliedModel)
+	}
+
+	// Config declaration is execution authority. Live agy models listing is only
+	// used to rewrite the model label after membership is confirmed.
+	declared := providers.ResolveEffortFromDeclared(req, "antigravity")
+	if declared.Fallback {
+		declared.AppliedModel = appliedModel
+		return declared
+	}
+
 	// Custom antigravity.bin is not the default capability catalog source.
-	// Until the resolver queries that specific binary, explicit effort stays auto.
 	if customBin := strings.TrimSpace(req.ProviderOptions["bin"]); customBin != "" {
-		if requested == contract.EffortAuto {
-			return providers.EffortAuto(requested, appliedModel)
-		}
 		return providers.EffortFallback(requested, appliedModel,
 			fmt.Sprintf("effort %s cannot be confirmed with custom antigravity.bin; applied auto", requested))
 	}
 
-	if requested == contract.EffortAuto {
-		return providers.EffortAuto(requested, appliedModel)
-	}
 	wantLevel, ok := antigravityEffortLevel(requested)
 	if !ok {
 		return providers.EffortFallback(requested, appliedModel,
@@ -81,7 +86,7 @@ func (Provider) ResolveEffort(ctx context.Context, req providers.EffortRequest) 
 }
 
 func (Provider) ResolveFast(_ context.Context, req providers.FastRequest) providers.FastResolution {
-	return providers.FastFallback(req.Requested, "antigravity", req.Model)
+	return providers.ResolveFastFromDeclared(req, "antigravity")
 }
 
 // resolveAgyAppliedModel maps known aliases to final agy labels for the dispatch

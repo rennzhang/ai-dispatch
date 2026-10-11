@@ -149,7 +149,7 @@ ai-dispatch send codex "review current diff" --effort auto
 规则：
 
 - 只有当前候选确认支持时才传精确档位。
-- 不支持或无法确认时回到 `auto`，绝不映射相邻低档，也不因 effort 失败重跑 provider。
+- 能力以 config 候选 `efforts` 声明为准；未声明或不在列表内回到 `auto`，绝不映射相邻低档，也不因 effort 失败重跑 provider。
 - 结果字段：`requested_effort`、`applied_effort`、`effort_fallback_reason`。
 - effort fallback **不**设置 `degraded`；`degraded`/`degrade_reason` 只表示路由候选切换。
 - 旧的 `grok.effort` provider option 已移除；使用 `--effort`。
@@ -166,9 +166,10 @@ ai-dispatch send gpt5.6-luna "implement the fix" --fast --json-result
 
 - Codex GPT-5.5/5.6 target 通过 `service_tier="priority"` 精确应用。
 - 不支持或无法确认的 provider 仍以标准速度执行当前候选，不重跑、不切换候选。
+- config `fast: true` 只是允许；不传 `--fast` 永远标准速度（`applied_fast=false`），声明不会让加速默认开启。
 - 结果字段：`requested_fast`、`applied_fast`、`fast_fallback_reason`；每个 route step 同时记录本候选是否应用。
 - fast capability fallback 不设置 `degraded`，也不写入通用 `warnings`；`degraded` 仍只表示路由候选切换。
-- 查询能力用 `ai-dispatch models resolve <target> --format json`，读取顶层 `fast: true|false`（primary candidate，经 provider `ResolveFast`）。
+- 查询能力用 `ai-dispatch models resolve <target> --format json`，读取候选上声明的 `efforts` 与 `fast`（config 真源；顶层 `fast` 为 primary 是否声明 `fast: true`）。
 
 ## 结果字段
 

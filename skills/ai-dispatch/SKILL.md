@@ -59,8 +59,9 @@ scripts/ai-dispatch send <target> "<task>" \
 - 长 prompt 先写文件，用 `--prompt-file <path>`。
 - 长任务、review、可追踪任务传 `--task-name`。
 - 默认在 prompt 末尾加一句“不要派发子代理，直接在当前会话完成”。只有用户明确要求被派发模型使用子代理时才去掉这句；Grok 额外传 `--provider-opt grok.subagents=on`。调用多个独立模型不算要求模型内部派发子代理。
-- 需要控制推理档位时传顶层 `--effort <level>`（`auto|none|minimal|low|medium|high|xhigh|max`）。省略或 `auto` 表示不覆盖 CLI 默认；不支持的精确档位会回到 `auto` 并写入 `effort_fallback_reason`，不会静默降到相邻档。不要使用已移除的 `grok.effort`。
-- 需要加速时统一传顶层 `--fast`。支持的 provider 会真实应用；不支持的 provider 按标准速度执行，并写入 `fast_fallback_reason`，不会静默声称已加速。
+- 需要控制推理档位时传顶层 `--effort <level>`（`auto|none|minimal|low|medium|high|xhigh|max`）。省略或 `auto` 表示不覆盖 CLI 默认。精确档位只在该候选的 config `efforts` 声明列表内才会传递；未声明或不在列表内会回到 `auto` 并写入 `effort_fallback_reason`，不会静默降到相邻档。偏好挑选时只在声明列表内选。不要使用已移除的 `grok.effort`。
+- 需要加速时统一传顶层 `--fast`。`fast: true` 只表示**允许**加速，不是默认开启：不传 `--fast` 时一律标准速度（`applied_fast=false`）。只有显式 `--fast` 且候选声明 `fast: true` 时才会真实应用；未声明或 `false` 按标准速度执行，并写入 `fast_fallback_reason`，不会静默声称已加速。
+- 新增、更新或移除 `config.json` models 候选时，询问用户是否配置 `efforts` / `fast`；未配置则保持 auto。可用 `models resolve <target> --format json` 查看各候选已声明的 `efforts` 与 `fast`。
 - 外部模型只提供输入；最终裁决由当前 Agent 做。
 
 ## 继续追问

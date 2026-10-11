@@ -22,19 +22,11 @@ type Provider struct{}
 func (Provider) Name() string { return "grok" }
 
 func (Provider) ResolveEffort(_ context.Context, req providers.EffortRequest) providers.EffortResolution {
-	requested := contract.NormalizeEffort(req.Requested)
-	if requested == contract.EffortAuto {
-		return providers.EffortAuto(requested, req.Model)
-	}
-	if grokSupportsEffort(req.Model, requested) {
-		return providers.EffortExact(requested, req.Model)
-	}
-	return providers.EffortFallback(requested, req.Model,
-		fmt.Sprintf("effort %s is not supported by grok/%s; applied auto", requested, effortModelLabel(req.Model)))
+	return providers.ResolveEffortFromDeclared(req, "grok")
 }
 
 func (Provider) ResolveFast(_ context.Context, req providers.FastRequest) providers.FastResolution {
-	return providers.FastFallback(req.Requested, "grok", req.Model)
+	return providers.ResolveFastFromDeclared(req, "grok")
 }
 
 func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
@@ -377,32 +369,18 @@ func routeLabel(provider string, model string) string {
 	return provider + ":" + model
 }
 
-func grokSupportsEffort(model string, effort contract.Effort) bool {
-	// Only verified single-model reasoning-depth IDs. Multi-agent models use
-	// agent-count semantics and must not receive --reasoning-effort here.
-	switch effort {
-	case contract.EffortLow, contract.EffortMedium, contract.EffortHigh:
-	default:
-		return false
-	}
+// SuggestEffortLevels returns optional init/detect hints for known Grok models.
+// Execution never consults this list; config ModelRoute.efforts is authority.
+// Multi-agent IDs are intentionally excluded (agent-count semantics).
+func SuggestEffortLevels(model string) []string {
 	normalized := strings.ToLower(strings.TrimSpace(model))
-	if normalized == "" {
-		return false
-	}
-	if strings.Contains(normalized, "multi") || strings.Contains(normalized, "agent") {
-		return false
+	if normalized == "" || strings.Contains(normalized, "multi") || strings.Contains(normalized, "agent") {
+		return nil
 	}
 	switch normalized {
 	case "grok-4.5", "grok-4", "grok4.5", "grok4":
-		return true
+		return []string{"low", "medium", "high"}
 	default:
-		return false
+		return nil
 	}
-}
-
-func effortModelLabel(model string) string {
-	if strings.TrimSpace(model) == "" {
-		return "default"
-	}
-	return model
 }

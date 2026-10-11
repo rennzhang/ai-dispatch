@@ -15,15 +15,19 @@ type DispatchTarget struct {
 	Source     string           `json:"source"`
 	ModelKey   string           `json:"model_key,omitempty"`
 	ActualID   string           `json:"actual_id,omitempty"`
+	Efforts    []string         `json:"efforts,omitempty"`
+	Fast       *bool            `json:"fast,omitempty"`
 	Candidates []RouteCandidate `json:"candidates,omitempty"`
 }
 
 type RouteCandidate struct {
-	Provider string `json:"provider"`
-	Model    string `json:"model,omitempty"`
-	Source   string `json:"source,omitempty"`
-	ModelKey string `json:"model_key,omitempty"`
-	ActualID string `json:"actual_id,omitempty"`
+	Provider string   `json:"provider"`
+	Model    string   `json:"model,omitempty"`
+	Source   string   `json:"source,omitempty"`
+	ModelKey string   `json:"model_key,omitempty"`
+	ActualID string   `json:"actual_id,omitempty"`
+	Efforts  []string `json:"efforts,omitempty"`
+	Fast     *bool    `json:"fast,omitempty"`
 }
 
 type ConfiguredModel struct {
@@ -182,6 +186,8 @@ func lookupConfiguredExactHits(value string) ([]DispatchTarget, error) {
 				Source:    "config",
 				ModelKey:  strings.TrimSpace(key),
 				ActualID:  model,
+				Efforts:   append([]string(nil), route.Efforts...),
+				Fast:      copyBoolPtr(route.Fast),
 			})
 		}
 	}
@@ -225,6 +231,8 @@ func configuredCandidates(requested string, key string, routes []config.ModelRou
 			Source:    "config",
 			ModelKey:  strings.TrimSpace(key),
 			ActualID:  model,
+			Efforts:   append([]string(nil), route.Efforts...),
+			Fast:      copyBoolPtr(route.Fast),
 		})
 	}
 	if len(candidates) == 0 {
@@ -245,6 +253,8 @@ func withCandidates(requested string, candidates []DispatchTarget) DispatchTarge
 				Source:   candidate.Source,
 				ModelKey: candidate.ModelKey,
 				ActualID: candidate.ActualID,
+				Efforts:  append([]string(nil), candidate.Efforts...),
+				Fast:     copyBoolPtr(candidate.Fast),
 			})
 		}
 	} else {
@@ -266,6 +276,8 @@ func CandidateTargets(target DispatchTarget) []DispatchTarget {
 			Source:    candidate.Source,
 			ModelKey:  candidate.ModelKey,
 			ActualID:  candidate.ActualID,
+			Efforts:   append([]string(nil), candidate.Efforts...),
+			Fast:      copyBoolPtr(candidate.Fast),
 		})
 	}
 	return out
@@ -308,6 +320,8 @@ func routeCandidates(target DispatchTarget) []RouteCandidate {
 		Source:   target.Source,
 		ModelKey: target.ModelKey,
 		ActualID: target.ActualID,
+		Efforts:  append([]string(nil), target.Efforts...),
+		Fast:     copyBoolPtr(target.Fast),
 	}}
 }
 
@@ -347,4 +361,12 @@ func implementedProvider(provider string) bool {
 	default:
 		return false
 	}
+}
+
+func copyBoolPtr(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
 }

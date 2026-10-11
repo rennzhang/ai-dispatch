@@ -663,8 +663,8 @@ func writeCodexModelConfig(t *testing.T) {
   "version": 1,
   "claude_transport": "print",
   "models": {
-    "gpt5.5": [{"provider": "codex", "model": "gpt-5.5"}],
-    "gpt5.6-luna": [{"provider": "codex", "model": "gpt-5.6-luna"}]
+    "gpt5.5": [{"provider": "codex", "model": "gpt-5.5", "fast": true}],
+    "gpt5.6-luna": [{"provider": "codex", "model": "gpt-5.6-luna", "efforts": ["low","medium","high","xhigh","max"], "fast": true}]
   },
   "providers": {}
 }`)
