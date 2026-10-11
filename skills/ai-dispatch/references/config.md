@@ -133,18 +133,23 @@ ai-dispatch send grok "Reply exactly: OK" \
 ```json
 {
   "models": {
-    "deepseek": [
-      { "provider": "omp", "model": "opencode-go/deepseek-v4.1-flash", "efforts": ["high", "max", "low"] }
+    "deepseek-flash": [
+      { "provider": "omp", "model": "opencode-go/deepseek-v4.1-flash", "efforts": ["high", "max"] }
+    ],
+    "dsf": [
+      { "provider": "omp", "model": "opencode-go/deepseek-v4.1-flash", "efforts": ["high", "max"] }
     ],
     "deepseek-pro": [
-      { "provider": "omp", "model": "opencode-go/deepseek-v4-pro", "efforts": ["high", "max", "low"] }
+      { "provider": "omp", "model": "opencode-go/deepseek-v4-pro", "efforts": ["high", "max"] }
     ]
   }
 }
 ```
 
 ```bash
-ai-dispatch send deepseek "…" --effort high --json-result
+ai-dispatch send deepseek-flash "…" --effort high --json-result
+ai-dispatch send dsf "…" --effort high --json-result
+ai-dispatch send deepseek-pro "…" --effort max --json-result
 ai-dispatch send omp --model opencode-go/deepseek-v4.1-flash "…" --effort max
 ```
 
