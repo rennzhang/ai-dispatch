@@ -256,6 +256,15 @@ func TestOMPProviderOptWhitelist(t *testing.T) {
 		t.Fatalf("req=%+v", req)
 	}
 
+	req, _, err = parseSend("send", []string{"omp", "hello", "--provider-opt", "omp.session=none"}, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.ProviderOpts["omp"]["session"] != "none" {
+		t.Fatalf("req=%+v", req)
+	}
+
+
 	_, _, err = parseSend("send", []string{"omp", "hello", "--provider-opt", "omp.thinking=high"}, &stderr)
 	if err == nil || !strings.Contains(err.Error(), "unsupported provider option") {
 		t.Fatalf("err=%v", err)

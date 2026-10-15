@@ -667,7 +667,7 @@ func validProviderOpt(provider string, key string) bool {
 	case "cursor":
 		return key == "approval"
 	case "omp":
-		return key == "approval"
+		return key == "approval" || key == "session"
 	default:
 		return false
 	}

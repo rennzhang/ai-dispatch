@@ -153,7 +153,7 @@ ai-dispatch send deepseek-pro "…" --effort max --json-result
 ai-dispatch send omp --model opencode-go/deepseek-flash "…" --effort max
 ```
 
-支持的 key：`omp.approval=always|default`。默认 `always` 传 `--auto-approve`。`--effort` 映射为 omp `--thinking`；`none` 对应 `off`。
+支持的 key：`omp.approval=always|default`，`omp.session=persist|none`。默认 `always` 传 `--auto-approve`，默认 `persist` 写会话。`none` 传 `--no-session`，一次性派发不进 `omp --resume`。`--effort` 映射为 omp `--thinking`；`none` 对应 `off`。
 
 
 ## 模型解析顺序

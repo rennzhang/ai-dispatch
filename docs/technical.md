@@ -323,7 +323,7 @@ ai-dispatch send dsf "Reply exactly: OK" --effort high --json-result
 ai-dispatch send omp --model opencode-go/deepseek-flash "Reply exactly: OK" --provider-opt omp.approval=default
 ```
 
-`omp.approval` 支持 `always`（默认，追加 `--auto-approve`）和 `default`（不自动批准工具/文件操作）。二进制查找顺序：`AI_DISPATCH_OMP_BIN` → `PATH` 中的 `omp` → `~/.bun/bin/omp` → `~/.local/bin/omp`。子进程环境保留 `OMP_` / `PI_` 前缀变量。
+`omp.approval` 支持 `always`（默认，追加 `--auto-approve`）和 `default`（不自动批准工具/文件操作）。`omp.session` 支持 `persist`（默认，写入 omp 会话）和 `none`（追加 `--no-session`，不进 resume；不能和 resume 同时用）。二进制查找顺序：`AI_DISPATCH_OMP_BIN` → `PATH` 中的 `omp` → `~/.bun/bin/omp` → `~/.local/bin/omp`。子进程环境保留 `OMP_` / `PI_` 前缀变量。
 
 ## Run history
 

@@ -88,6 +88,32 @@ func TestBuildOMPApprovalDefaultSkipsAutoApprove(t *testing.T) {
 	}
 }
 
+func TestBuildOMPSessionNoneSkipsPersistence(t *testing.T) {
+	fakeOMPBin(t)
+	target := routing.DispatchTarget{Requested: "omp", Provider: "omp", Model: "opencode-go/deepseek-v4.1-flash"}
+	spec, err := Provider{}.Build(providers.BuildRequest{
+		Prompt:          "hello",
+		Target:          target,
+		ProviderOptions: map[string]string{"session": "none"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(spec.Args, "\x00"), "--no-session") {
+		t.Fatalf("args=%#v", spec.Args)
+	}
+	_, err = Provider{}.Build(providers.BuildRequest{
+		Prompt:          "hello",
+		Target:          target,
+		SessionID:       "01a12a51-bc10-7000-8b82-d63795425090",
+		ProviderOptions: map[string]string{"session": "none"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot resume") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+
 func TestBuildOMPResumeAndCWD(t *testing.T) {
 	fakeOMPBin(t)
 	target := routing.DispatchTarget{Requested: "omp", Provider: "omp", Model: "opencode-go/deepseek-v4.1-flash"}

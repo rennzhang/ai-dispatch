@@ -34,7 +34,7 @@ func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 		return runtime.CommandSpec{}, err
 	}
 	args := []string{bin, "--print", "--mode", "json"}
-	if err := appendOMPOptions(&args, req.ProviderOptions); err != nil {
+	if err := appendOMPOptions(&args, req.ProviderOptions, req.SessionID); err != nil {
 		return runtime.CommandSpec{}, err
 	}
 	if req.Target.Model != "" {
@@ -69,7 +69,7 @@ func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 	return runtime.CommandSpec{Args: args, Env: runtime.SanitizedEnv(nil), Stdin: stdin}, nil
 }
 
-func appendOMPOptions(args *[]string, opts map[string]string) error {
+func appendOMPOptions(args *[]string, opts map[string]string, sessionID string) error {
 	approval := strings.TrimSpace(opts["approval"])
 	if approval == "" {
 		approval = "always"
@@ -80,6 +80,20 @@ func appendOMPOptions(args *[]string, opts map[string]string) error {
 	case "default":
 	default:
 		return fmt.Errorf("omp.approval must be always or default")
+	}
+	session := strings.TrimSpace(opts["session"])
+	if session == "" {
+		session = "persist"
+	}
+	switch session {
+	case "persist":
+	case "none":
+		if strings.TrimSpace(sessionID) != "" {
+			return fmt.Errorf("omp.session=none cannot resume a session")
+		}
+		*args = append(*args, "--no-session")
+	default:
+		return fmt.Errorf("omp.session must be persist or none")
 	}
 	return nil
 }

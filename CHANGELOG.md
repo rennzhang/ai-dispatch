@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- OMP provider accepts `omp.session=none` and passes `--no-session`, so one-shot sends stay out of `omp --resume`.
+
 ## v0.9.0
 
 - Add native OMP (oh-my-pi / `omp`) provider: `omp --print --mode json` with `--thinking` mapped from top-level `--effort` (`none` → `off`), config-declared efforts/fast authority, and `omp.approval=always|default` (default auto-approve).
