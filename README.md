@@ -87,6 +87,30 @@ ai-dispatch send codex "检查当前 diff，指出风险和遗漏，不修改文
 
 你不需要自己管理 session id；Agent 会从 ai-dispatch 的返回结果里拿。
 
+### Codex Desktop
+
+Codex 默认仍走 `codex exec`。只有明确要在 Codex Desktop 里看这条对话时，才加 `--surface app`：
+
+```bash
+ai-dispatch send codex "实现这个修复，完成后说明改了什么" --surface app \
+  --cwd "$PWD" --json-result --task-name desktop-fix
+```
+
+继续这条 Desktop 线程时必须再写 `--surface app`。渠道不会记住；不写会用 CLI 去抢同一条会话。
+
+```bash
+ai-dispatch resume --session-id <id> --surface app "只看这次改动" \
+  --json-result --task-name desktop-fix-r2
+```
+
+`--model`、`--effort`、`--fast` 两条渠道一样。app 回合不受 `--timeout` 限制，取消仍会停下。其他 provider 不接受 `--surface app`。
+
+### 派发标记
+
+每次实际发出的正文第一行是 `[ai-dispatch]`，空一行后再接原文。`send`、`resume`、stdin、`--prompt-file`、CLI 和 Desktop 都一样。
+
+这是来源标记，用来区分人自己打的消息和 ai-dispatch 派发出去的消息。它不是给模型的指令。
+
 ## 安装
 
 终端使用，安装 CLI（需要 Node.js 18+）：

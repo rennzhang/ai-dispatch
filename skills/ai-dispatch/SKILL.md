@@ -63,6 +63,26 @@ scripts/ai-dispatch send <target> "<task>" \
 - 需要加速时统一传顶层 `--fast`。`fast: true` 只表示**允许**加速，不是默认开启：不传 `--fast` 时一律标准速度（`applied_fast=false`）。只有显式 `--fast` 且候选声明 `fast: true` 时才会真实应用；未声明或 `false` 按标准速度执行，并写入 `fast_fallback_reason`，不会静默声称已加速。
 - 新增、更新或移除 `config.json` models 候选时，询问用户是否配置 `efforts` / `fast`；未配置则保持 auto。可用 `models resolve <target> --format json` 查看各候选已声明的 `efforts` 与 `fast`。
 - 外部模型只提供输入；最终裁决由当前 Agent 做。
+- 实际发出的正文第一行固定是 `[ai-dispatch]`，空一行后再接原文。`send`、`resume`、stdin、`--prompt-file`、CLI 和 Desktop 都一样。这是来源标记，不是指令，检索靠这个字符串。
+
+## Codex CLI 和 Desktop
+
+Codex 默认走 CLI（`codex exec`）。不要因为会话在 Codex app 里就自动改渠道。只有用户明确要求发到客户端时，才加 `--surface app`。
+
+`--model`、`--effort`、`--fast` 两条渠道共用。变的只是投递：CLI 是本机 `codex exec`；`app` 是 Codex Desktop 里的线程。
+
+
+```bash
+# 在 Desktop 里新建对话
+scripts/ai-dispatch send codex "<task>" --surface app \
+  --cwd "$PWD" --json-result --task-name <name>
+
+# 继续这条 Desktop 线程。渠道不会记住，resume 也要再写 --surface app
+scripts/ai-dispatch resume --session-id <id> --surface app "<delta>" \
+  --json-result --task-name <name>-r2
+```
+
+没写 `--surface`，或写了 `--surface cli`，继续走 CLI。其他 provider 不接受 `--surface app`。
 
 ## 继续追问
 
@@ -73,7 +93,7 @@ scripts/ai-dispatch resume --session-id <id> "<delta>" \
   --json-result --stream-progress --task-name <name>-r2
 ```
 
-不要把历史对话复制进新 prompt。追问只写新增问题或 delta。
+不要把历史对话复制进新 prompt。追问只写新增问题或 delta。Desktop 线程的追问必须再带 `--surface app`，否则会用 CLI 去抢同一条会话。
 
 ## 读结果
 

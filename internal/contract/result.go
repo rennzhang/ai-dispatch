@@ -82,14 +82,17 @@ type FirstRunSetupInfo struct {
 }
 
 type ProviderResult struct {
-	SchemaVersion        string             `json:"schema_version"`
-	OK                   bool               `json:"ok"`
-	Status               Status             `json:"status"`
-	AgentHint            string             `json:"agent_hint,omitempty"`
-	UserFacingSummary    string             `json:"user_facing_summary,omitempty"`
-	ProviderUsed         string             `json:"provider_used"`
-	ModelUsed            string             `json:"model_used,omitempty"`
-	SessionID            string             `json:"session_id,omitempty"`
+	SchemaVersion     string `json:"schema_version"`
+	OK                bool   `json:"ok"`
+	Status            Status `json:"status"`
+	AgentHint         string `json:"agent_hint,omitempty"`
+	UserFacingSummary string `json:"user_facing_summary,omitempty"`
+	ProviderUsed      string `json:"provider_used"`
+	ModelUsed         string `json:"model_used,omitempty"`
+	SessionID         string `json:"session_id,omitempty"`
+	// Surface is the delivery channel when it is not the provider CLI.
+	// Codex Desktop deliveries set this to "app".
+	Surface              string             `json:"surface,omitempty"`
 	Degraded             bool               `json:"degraded"`
 	DegradeReason        string             `json:"degrade_reason,omitempty"`
 	DurationMS           int64              `json:"duration_ms"`

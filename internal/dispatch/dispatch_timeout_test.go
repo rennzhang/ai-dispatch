@@ -2,6 +2,8 @@ package dispatch
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -134,5 +136,70 @@ func TestFallbackPreservesRuntimeWarningsFromEveryCandidate(t *testing.T) {
 		if !strings.Contains(warnings, expected) {
 			t.Fatalf("missing %q in warnings=%v", expected, result.Warnings)
 		}
+	}
+}
+
+func TestAppSurfaceKeepsCancelWithoutRequestDeadline(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	ctx, stop := executionContext(parent, contract.DispatchRequest{Surface: "app", TimeoutSeconds: 1})
+	defer stop()
+	if _, ok := ctx.Deadline(); ok {
+		t.Fatal("app surface must not add a request deadline")
+	}
+	cancel()
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("cancel must still reach an app-surface wait")
+	}
+}
+
+func TestCLISurfaceKeepsRequestDeadline(t *testing.T) {
+	ctx, stop := executionContext(context.Background(), contract.DispatchRequest{TimeoutSeconds: 1})
+	defer stop()
+	if _, ok := ctx.Deadline(); !ok {
+		t.Fatal("cli surface must keep --timeout")
+	}
+}
+
+func TestStampDispatchPromptCoversInlineAndFile(t *testing.T) {
+	inline := contract.DispatchRequest{Prompt: "hello"}
+	if _, err := stampDispatchPrompt(&inline); err != nil {
+		t.Fatal(err)
+	}
+	if inline.Prompt != "[ai-dispatch]\n\nhello" {
+		t.Fatalf("prompt=%q", inline.Prompt)
+	}
+	again := inline
+	if _, err := stampDispatchPrompt(&again); err != nil {
+		t.Fatal(err)
+	}
+	if again.Prompt != inline.Prompt {
+		t.Fatalf("double stamp=%q", again.Prompt)
+	}
+
+	original := filepath.Join(t.TempDir(), "prompt.md")
+	if err := os.WriteFile(original, []byte("from file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fileReq := contract.DispatchRequest{PromptFile: original, Prompt: "ignored"}
+	cleanup, err := stampDispatchPrompt(&fileReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if fileReq.Prompt != "" || fileReq.PromptFile == original {
+		t.Fatalf("req=%+v", fileReq)
+	}
+	stamped, err := os.ReadFile(fileReq.PromptFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stamped) != "[ai-dispatch]\n\nfrom file" {
+		t.Fatalf("stamped=%q", stamped)
+	}
+	raw, err := os.ReadFile(original)
+	if err != nil || string(raw) != "from file" {
+		t.Fatalf("original=%q err=%v", raw, err)
 	}
 }

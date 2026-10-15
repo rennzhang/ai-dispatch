@@ -100,6 +100,7 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "  --no-wrap-up                   do not emit the user-facing wrap-up card")
 	fmt.Fprintln(w, "  --effort level                 reasoning effort: auto|none|minimal|low|medium|high|xhigh|max")
 	fmt.Fprintln(w, "  --fast                         request provider fast mode; unsupported providers use standard speed with fast_fallback_reason")
+	fmt.Fprintln(w, "  --surface cli|app              Codex delivery channel; default cli. app sends into Codex Desktop")
 	fmt.Fprintln(w, "  --provider-opt key=value        provider option, e.g. claude.transport=print|pty|auto")
 	fmt.Fprintln(w, "  --activity-timeout seconds      fail after no provider activity; 0 disables")
 }
@@ -447,6 +448,7 @@ func parseSend(command string, argv []string, stderr io.Writer) (contract.Dispat
 	fast := fs.Bool("fast", false, "request provider fast mode; unsupported providers use standard speed with fast_fallback_reason")
 	wrapUp := fs.Bool("wrap-up", false, "enable the user-facing wrap-up card (default: off)")
 	noWrapUp := fs.Bool("no-wrap-up", false, "do not emit the user-facing wrap-up card")
+	surface := fs.String("surface", "", "Codex delivery channel: cli (default) or app")
 	providerOpts := multiFlag{}
 	fs.Var(&providerOpts, "provider-opt", "provider option, e.g. claude.transport=print|pty|auto")
 	if err := fs.Parse(argv); err != nil {
@@ -466,6 +468,10 @@ func parseSend(command string, argv []string, stderr io.Writer) (contract.Dispat
 		TimeoutSeconds:  defaultFixedTimeoutSeconds(firstNonNegative(*timeout, *timeoutShort)),
 		TaskName:        *taskName,
 		Fast:            *fast,
+		Surface:         normalizeSurface(*surface),
+	}
+	if err := validateSurface(req.Surface); err != nil {
+		return contract.DispatchRequest{}, *jsonResult, err
 	}
 	parsedEffort, err := contract.ParseEffort(*effort)
 	if err != nil {
@@ -497,6 +503,19 @@ func parseSend(command string, argv []string, stderr io.Writer) (contract.Dispat
 	}
 	req.DisableUserFacing = disable
 	return req, *jsonResult, nil
+}
+
+func normalizeSurface(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func validateSurface(value string) error {
+	switch value {
+	case "", "cli", "app":
+		return nil
+	default:
+		return fmt.Errorf("invalid --surface %q; use cli or app", value)
+	}
 }
 
 func rejectRetiredArgs(argv []string) error {
@@ -605,7 +624,8 @@ func isValueFlag(arg string) bool {
 	switch name {
 	case "--prompt-file", "--output-file", "-o", "--model", "-m", "--cwd",
 		"--target", "--session-id", "--session-provider", "--timeout", "-t",
-		"--activity-timeout", "--task-name", "--effort", "--provider-opt", "--format":
+		"--activity-timeout", "--task-name", "--effort", "--provider-opt", "--format",
+		"--surface":
 		return true
 	default:
 		return false

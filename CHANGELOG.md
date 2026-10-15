@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
+## v0.10.0
 
+- Codex stays on `codex exec` unless `--surface app` is set. That channel creates a Desktop thread and continues it with `codex queue`, using the same `--model` / `--effort` / `--fast` as the CLI. `--timeout` does not cap an app turn; cancel still stops it. A follow-up is matched to the new user message it queued, not to whichever turn finishes next.
+- Every sent body, including resume, stdin, and `--prompt-file`, starts with `[ai-dispatch]` and a blank line. The marker names the source. It is not an instruction.
 - OMP provider accepts `omp.session=none` and passes `--no-session`, so one-shot sends stay out of `omp --resume`.
 
 ## v0.9.0

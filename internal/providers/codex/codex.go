@@ -64,6 +64,12 @@ func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 func (Provider) Parse(run runtime.RunResult, req providers.BuildRequest) contract.ProviderResult {
 	stdout := string(run.Stdout)
 	text, sessionID := parseCodexStream(stdout)
+	surface := ""
+	if envelope, ok := parseAppEnvelope(stdout); ok {
+		text = envelope.Text
+		sessionID = envelope.SessionID
+		surface = envelope.Surface
+	}
 	status := contract.StatusSuccess
 	var failure *contract.FailureClass
 	next := contract.NextDone
@@ -89,6 +95,10 @@ func (Provider) Parse(run runtime.RunResult, req providers.BuildRequest) contrac
 			stderr = diagnostics.NoResultMessage("Codex", stdout, string(run.Stderr), run.ExitCode)
 		}
 	}
+	warnings := []string{}
+	if surface == surfaceApp {
+		warnings = append(warnings, "delivered through Codex Desktop, not codex exec")
+	}
 	return contract.ProviderResult{
 		SchemaVersion:   "2.0",
 		OK:              ok,
@@ -97,6 +107,7 @@ func (Provider) Parse(run runtime.RunResult, req providers.BuildRequest) contrac
 		ProviderUsed:    "codex",
 		ModelUsed:       req.Target.Model,
 		SessionID:       sessionID,
+		Surface:         surface,
 		RequestedTarget: req.Target.Requested,
 		RouteTrace:      []string{routeLabel("codex", req.Target.Model)},
 		RouteSteps: []contract.RouteStep{{
@@ -108,10 +119,25 @@ func (Provider) Parse(run runtime.RunResult, req providers.BuildRequest) contrac
 		ExitCode:     run.ExitCode,
 		DurationMS:   run.DurationMS,
 		Stderr:       stderr,
-		Warnings:     []string{},
+		Warnings:     warnings,
 		NextAction:   next,
 		FailureClass: failure,
 	}
+}
+
+func parseAppEnvelope(stdout string) (appEnvelope, bool) {
+	line := strings.TrimSpace(stdout)
+	if !strings.HasPrefix(line, "{") {
+		return appEnvelope{}, false
+	}
+	var envelope appEnvelope
+	if err := json.Unmarshal([]byte(line), &envelope); err != nil {
+		return appEnvelope{}, false
+	}
+	if envelope.Surface != surfaceApp {
+		return appEnvelope{}, false
+	}
+	return envelope, true
 }
 
 func parseCodexStream(stdout string) (string, string) {

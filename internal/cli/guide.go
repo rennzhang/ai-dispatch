@@ -54,7 +54,7 @@ func printModelGuide(stdout io.Writer) error {
 	fmt.Fprintln(stdout, "")
 	fmt.Fprintln(stdout, "## Provider")
 	fmt.Fprintln(stdout, "")
-	fmt.Fprintln(stdout, "- `codex`：调用 `codex exec`。")
+	fmt.Fprintln(stdout, "- `codex`：默认调用 `codex exec`。只有显式 `--surface app` 才把同一套模型和 effort 送进 Codex Desktop；继续聊用 `resume --surface app`。app 回合不受 `--timeout` 限制，取消仍会停下。")
 	fmt.Fprintln(stdout, "- `claude`：调用 `claude -p`。")
 	fmt.Fprintln(stdout, "- `opencode`：调用 `opencode run`。")
 	fmt.Fprintln(stdout, "- `antigravity`：调用 `agy --print`。")

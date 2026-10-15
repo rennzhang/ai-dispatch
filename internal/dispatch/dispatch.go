@@ -46,11 +46,7 @@ func ExecuteWithOptions(req contract.DispatchRequest, opts Options) contract.Pro
 		baseCtx, stopSignals = signal.NotifyContext(context.Background(), dispatchSignals()...)
 	}
 	defer stopSignals()
-	dispatchCtx := baseCtx
-	stopTimeout := func() {}
-	if req.TimeoutSeconds > 0 {
-		dispatchCtx, stopTimeout = context.WithTimeout(baseCtx, seconds(req.TimeoutSeconds))
-	}
+	dispatchCtx, stopTimeout := executionContext(baseCtx, req)
 	defer stopTimeout()
 
 	target, err := resolveTarget(req)
@@ -244,6 +240,17 @@ func executeTarget(baseCtx context.Context, req contract.DispatchRequest, target
 		DeclaredFast: target.Fast,
 	})
 
+	cleanup, stampErr := stampDispatchPrompt(&req)
+	defer cleanup()
+	if stampErr != nil {
+		result := contract.ErrorResult(contract.StatusError, contract.FailureInput, stampErr.Error(), 2)
+		result.RequestedTarget = target.Requested
+		result.ProviderUsed = target.Provider
+		ensureRouteMetadata(&result, target, 0)
+		applyEffortResolution(&result, resolution)
+		applyFastResolution(&result, fastResolution)
+		return result
+	}
 	buildTarget := target
 	buildTarget.Model = resolution.AppliedModel
 	buildReq := providers.BuildRequest{
@@ -257,6 +264,33 @@ func executeTarget(baseCtx context.Context, req contract.DispatchRequest, target
 		Effort:                 resolution.Applied,
 		Fast:                   fastResolution.Applied,
 		ProviderOptions:        req.ProviderOpts[target.Provider],
+		Surface:                req.Surface,
+	}
+	if req.Surface == "app" && target.Provider != "codex" {
+		result := contract.ErrorResult(contract.StatusError, contract.FailureInput, "only codex supports --surface app; other providers stay on their CLI", 2)
+		result.RequestedTarget = target.Requested
+		result.ProviderUsed = target.Provider
+		ensureRouteMetadata(&result, buildTarget, 0)
+		applyEffortResolution(&result, resolution)
+		applyFastResolution(&result, fastResolution)
+		return result
+	}
+	if runner, ok := p.(providers.DirectRunner); ok {
+		run, handled, err := runner.RunDirect(baseCtx, buildReq)
+		if err != nil {
+			failure, exitCode := buildFailure(err)
+			result := contract.ErrorResult(contract.StatusError, failure, err.Error(), exitCode)
+			result.RequestedTarget = target.Requested
+			result.ProviderUsed = target.Provider
+			result.Surface = req.Surface
+			ensureRouteMetadata(&result, buildTarget, 0)
+			applyEffortResolution(&result, resolution)
+			applyFastResolution(&result, fastResolution)
+			return result
+		}
+		if handled {
+			return providerResultFromRun(p, run, buildReq, buildTarget, resolution, fastResolution)
+		}
 	}
 	spec, err := p.Build(buildReq)
 	if err != nil {
@@ -476,6 +510,9 @@ func contextTargetResult(ctx context.Context, target routing.DispatchTarget, dur
 }
 
 func shouldTryNextCandidate(req contract.DispatchRequest, result contract.ProviderResult) bool {
+	if req.Surface == "app" {
+		return false
+	}
 	if req.Command != "send" || result.OK {
 		return false
 	}
@@ -662,6 +699,61 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func executionContext(base context.Context, req contract.DispatchRequest) (context.Context, context.CancelFunc) {
+	// App turns run until they finish. --timeout stays on CLI channels only.
+	// Returning the caller context keeps cancel, without trying to peel a deadline off later.
+	if req.TimeoutSeconds > 0 && !appSurface(req.Surface) {
+		return context.WithTimeout(base, seconds(req.TimeoutSeconds))
+	}
+	return base, func() {}
+}
+
+func appSurface(surface string) bool {
+	return strings.EqualFold(strings.TrimSpace(surface), "app")
+}
+
+const dispatchPromptMarker = "[ai-dispatch]"
+
+func stampPrompt(text string) string {
+	if strings.HasPrefix(text, dispatchPromptMarker+"\n\n") || text == dispatchPromptMarker {
+		return text
+	}
+	return dispatchPromptMarker + "\n\n" + text
+}
+
+func stampDispatchPrompt(req *contract.DispatchRequest) (func(), error) {
+	noop := func() {}
+	if req.PromptFile != "" {
+		data, err := os.ReadFile(req.PromptFile)
+		if err != nil {
+			return noop, fmt.Errorf("cannot read --prompt-file")
+		}
+		file, err := os.CreateTemp("", "ai-dispatch-prompt-*")
+		if err != nil {
+			return noop, fmt.Errorf("cannot write stamped prompt")
+		}
+		name := file.Name()
+		cleanup := func() { _ = os.Remove(name) }
+		if _, err := file.WriteString(stampPrompt(string(data))); err != nil {
+			_ = file.Close()
+			cleanup()
+			return noop, fmt.Errorf("cannot write stamped prompt")
+		}
+		if err := file.Close(); err != nil {
+			cleanup()
+			return noop, fmt.Errorf("cannot write stamped prompt")
+		}
+		req.PromptFile = name
+		req.Prompt = ""
+		return cleanup, nil
+	}
+	if strings.TrimSpace(req.Prompt) == "" {
+		return noop, nil
+	}
+	req.Prompt = stampPrompt(req.Prompt)
+	return noop, nil
 }
 
 func seconds(value int) time.Duration {

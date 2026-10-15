@@ -135,6 +135,10 @@ ai-dispatch resume --session-id <id> "focus on the delta" \
 
 程序化调用应使用 `--json-result`。需要实时进度时加 `--stream-progress`。
 
+Codex 默认 `codex exec`。`--surface app` 把同一条任务送进 Codex Desktop；`resume` 必须再次带上，否则会用 CLI 续同一条 session。app 回合不套 `--timeout`，调用方取消仍然有效。其他 provider 拒绝 `app`。
+
+每次实际发出的正文，包括 stdin 和 `--prompt-file`，都会先写一行 `[ai-dispatch]`，空一行，再接原文。这是来源标记，不是指令。
+
 ## Reasoning effort
 
 跨 provider 统一入口：

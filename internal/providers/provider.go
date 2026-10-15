@@ -23,6 +23,9 @@ type BuildRequest struct {
 	Effort          contract.Effort
 	Fast            bool
 	ProviderOptions map[string]string
+	// Surface is the delivery channel. Empty means the provider CLI.
+	// Codex accepts "app" for the Desktop client.
+	Surface string
 }
 
 // EffortRequest is the per-candidate input to ResolveEffort.
@@ -70,6 +73,12 @@ type Provider interface {
 	ResolveFast(context.Context, FastRequest) FastResolution
 	Build(BuildRequest) (runtime.CommandSpec, error)
 	Parse(runtime.RunResult, BuildRequest) contract.ProviderResult
+}
+
+// DirectRunner is an optional provider path for a delivery channel that is
+// not one subprocess command. handled=false means the caller should use Build.
+type DirectRunner interface {
+	RunDirect(context.Context, BuildRequest) (runtime.RunResult, bool, error)
 }
 
 // EffortAuto keeps the original model and applies no effort override.
