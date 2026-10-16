@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -99,7 +98,7 @@ func continueDesktopThread(ctx context.Context, req providers.BuildRequest, prom
 		return "", req.SessionID, err
 	}
 	focusDesktopThread(req.SessionID)
-	text, err := waitForQueuedReply(ctx, rollout, before, prompt)
+	text, err := waitForQueuedReply(ctx, req.SessionID, rollout, before, prompt)
 	if err != nil {
 		return "", req.SessionID, err
 	}
@@ -377,45 +376,12 @@ func focusDesktopThread(threadID string) {
 	_ = cmd.Run()
 }
 
-func findRollout(threadID string) (string, error) {
-	root, err := codexSessionsDir()
-	if err != nil {
-		return "", err
-	}
-	var found string
-	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
-			return nil
-		}
-		if strings.Contains(entry.Name(), threadID) && strings.HasSuffix(entry.Name(), ".jsonl") {
-			found = path
-			return fmt.Errorf("stop")
-		}
-		return nil
-	})
-	if found == "" {
-		return "", fmt.Errorf("codex desktop thread %s has no rollout yet; create it with send --surface app first", threadID)
-	}
-	return found, nil
-}
-
-func codexSessionsDir() (string, error) {
-	if home := strings.TrimSpace(os.Getenv("CODEX_HOME")); home != "" {
-		return filepath.Join(home, "sessions"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".codex", "sessions"), nil
-}
-
-func waitForQueuedReply(ctx context.Context, rollout string, before []byte, prompt string) (string, error) {
+func waitForQueuedReply(ctx context.Context, threadID, rollout string, before []byte, prompt string) (string, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		data, err := os.ReadFile(rollout)
+		data, err := readActiveRollout(threadID, rollout)
 		if err != nil {
 			return "", fmt.Errorf("read codex rollout: %w", err)
 		}

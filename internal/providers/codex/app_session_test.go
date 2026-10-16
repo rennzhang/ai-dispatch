@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rennzhang/ai-dispatch/internal/providers"
 	"github.com/rennzhang/ai-dispatch/internal/routing"
@@ -122,10 +123,174 @@ func TestQueuedReplyRejectsAmbiguousAndFailedTurns(t *testing.T) {
 }
 
 func TestWaitForQueuedReplyReturnsReadError(t *testing.T) {
-	_, err := waitForQueuedReply(context.Background(), filepath.Join(t.TempDir(), "missing.jsonl"), nil, "PROMPT")
+	t.Setenv("CODEX_HOME", t.TempDir())
+	_, err := waitForQueuedReply(context.Background(), "missing", filepath.Join(t.TempDir(), "missing.jsonl"), nil, "PROMPT")
 	if err == nil {
 		t.Fatal("a rollout read error must stop the wait")
 	}
+}
+
+func TestLiveSegmentIsTheRolloutLeaf(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	const thread = "01a13974-ade6-7ef1-8038-f9bae6596624"
+	const mid = "01a14000-0000-7000-8000-000000000001"
+	const leaf = "01a142d9-9b8b-70c3-a6f8-d69b38972cf8"
+	writeRollout(t, home, "2026", "10", "14",
+		"rollout-2026-10-14T16-08-30-"+thread+".jsonl",
+		sessionMetaLine("")+userLine("msg-old", "turn-old", "PROMPT")+terminalLine("task_complete", "turn-old", "STALE", ""))
+	writeRollout(t, home, "2026", "10", "15",
+		"rollout-2026-10-15T10-00-00-"+thread+"_"+mid+".jsonl",
+		sessionMetaLine(thread)+userLine("msg-mid", "turn-mid", "PROMPT")+terminalLine("task_complete", "turn-mid", "MID", ""))
+	live := writeRollout(t, home, "2026", "10", "16",
+		"rollout-2026-10-16T11-55-19-"+thread+"_"+leaf+".jsonl",
+		sessionMetaLine(mid))
+
+	got, err := findRollout(thread)
+	if err != nil || got != live {
+		t.Fatalf("got=%s err=%v", got, err)
+	}
+	before, err := os.ReadFile(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(live, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(userLine("msg-new", "turn-new", "PROMPT") + terminalLine("task_complete", "turn-new", "ANSWER", "")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	text, err := waitForQueuedReply(ctx, thread, live, before, "PROMPT")
+	if err != nil || text != "ANSWER" {
+		t.Fatalf("text=%q err=%v", text, err)
+	}
+}
+
+func TestQueuedReplyFollowsSegmentCreatedDuringWait(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	const thread = "01a13974-ade6-7ef1-8038-f9bae6596624"
+	const liveID = "01a142d9-9b8b-70c3-a6f8-d69b38972cf8"
+	const nextID = "01a14300-0000-7000-8000-000000000002"
+	writeRollout(t, home, "2026", "10", "14",
+		"rollout-2026-10-14T16-08-30-"+thread+".jsonl",
+		sessionMetaLine(""))
+	live := writeRollout(t, home, "2026", "10", "16",
+		"rollout-2026-10-16T11-55-19-"+thread+"_"+liveID+".jsonl",
+		sessionMetaLine(thread)+userLine("msg-old", "turn-old", "PROMPT")+terminalLine("task_complete", "turn-old", "STALE", ""))
+	got, err := findRollout(thread)
+	if err != nil || got != live {
+		t.Fatalf("got=%s err=%v", got, err)
+	}
+	before, err := os.ReadFile(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	type reply struct {
+		text string
+		err  error
+	}
+	done := make(chan reply, 1)
+	go func() {
+		text, err := waitForQueuedReply(ctx, thread, live, before, "PROMPT")
+		done <- reply{text, err}
+	}()
+	time.Sleep(200 * time.Millisecond)
+	queued := userLine("msg-new", "turn-new", "PROMPT")
+	f, err := os.OpenFile(live, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(queued); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	writeRollout(t, home, "2026", "10", "16",
+		"rollout-2026-10-16T14-20-04-"+thread+"_"+nextID+".jsonl",
+		sessionMetaLine(liveID)+userLine("msg-old", "turn-old", "PROMPT")+queued+terminalLine("task_complete", "turn-new", "ANSWER", ""))
+
+	select {
+	case got := <-done:
+		if got.err != nil || got.text != "ANSWER" {
+			t.Fatalf("text=%q err=%v", got.text, got.err)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+}
+
+func TestTerminalOnNextSegmentStillMatchesTheQueuedTurn(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	const thread = "01a13974-ade6-7ef1-8038-f9bae6596624"
+	const liveID = "01a142d9-9b8b-70c3-a6f8-d69b38972cf8"
+	const nextID = "01a14300-0000-7000-8000-000000000002"
+	writeRollout(t, home, "2026", "10", "14",
+		"rollout-2026-10-14T16-08-30-"+thread+".jsonl",
+		sessionMetaLine("")+userLine("msg-old", "turn-old", "PROMPT")+terminalLine("task_complete", "turn-old", "STALE", ""))
+	live := writeRollout(t, home, "2026", "10", "16",
+		"rollout-2026-10-16T11-55-19-"+thread+"_"+liveID+".jsonl",
+		sessionMetaLine(thread))
+	before, err := os.ReadFile(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(live, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(userLine("msg-new", "turn-new", "PROMPT")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	writeRollout(t, home, "2026", "10", "16",
+		"rollout-2026-10-16T14-20-04-"+thread+"_"+nextID+".jsonl",
+		sessionMetaLine(liveID)+terminalLine("task_complete", "turn-new", "ANSWER", ""))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	text, err := waitForQueuedReply(ctx, thread, live, before, "PROMPT")
+	if err != nil || text != "ANSWER" {
+		t.Fatalf("text=%q err=%v", text, err)
+	}
+}
+
+func writeRollout(t *testing.T, home string, parts ...string) string {
+	t.Helper()
+	if len(parts) < 2 {
+		t.Fatal("writeRollout needs a filename and a body")
+	}
+	body := parts[len(parts)-1]
+	name := parts[len(parts)-2]
+	dir := filepath.Join(append([]string{home, "sessions"}, parts[:len(parts)-2]...)...)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func sessionMetaLine(parent string) string {
+	if parent == "" {
+		return "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread\",\"session_id\":\"thread\"}}\n"
+	}
+	return fmt.Sprintf("{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread\",\"session_id\":\"thread\",\"history_base\":{\"thread_id\":%q}}}\n", parent)
 }
 
 func userLine(messageID, turnID, text string) string {
