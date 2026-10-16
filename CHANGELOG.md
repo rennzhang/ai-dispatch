@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.10.1
+
+- `resume --surface app` follows a Desktop thread that continued into a new rollout segment (`rollout-<time>-<threadID>_<segmentID>.jsonl`). It anchors on the live segment, and while waiting it also reads continuations opened after that, so a reply written to a newer segment no longer waits until timeout.
+
 ## v0.10.0
 
 - Codex stays on `codex exec` unless `--surface app` is set. That channel creates a Desktop thread and continues it with `codex queue`, using the same `--model` / `--effort` / `--fast` as the CLI. `--timeout` does not cap an app turn; cancel still stops it. A follow-up is matched to the new user message it queued, not to whichever turn finishes next.
