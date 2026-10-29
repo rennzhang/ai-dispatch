@@ -204,6 +204,31 @@ func TestDefaultActivityTimeoutIsDisabledForAllProviders(t *testing.T) {
 	}
 }
 
+func TestAppSurfaceKeepsActivityTimeoutUnset(t *testing.T) {
+	var stderr bytes.Buffer
+	req, _, err := parseSend("send", []string{"--surface", "app", "gpt5.5", "hello"}, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.ActivityTimeoutSeconds != -1 {
+		t.Fatalf("app surface must keep \"unset\" (-1), got %d", req.ActivityTimeoutSeconds)
+	}
+	req, _, err = parseSend("send", []string{"--surface", "app", "--activity-timeout", "0", "gpt5.5", "hello"}, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.ActivityTimeoutSeconds != 0 {
+		t.Fatalf("explicit 0 must stay a disable, got %d", req.ActivityTimeoutSeconds)
+	}
+	req, _, err = parseSend("send", []string{"--surface", "app", "--activity-timeout", "300", "gpt5.5", "hello"}, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.ActivityTimeoutSeconds != 300 {
+		t.Fatalf("explicit value must pass through, got %d", req.ActivityTimeoutSeconds)
+	}
+}
+
 func TestDefaultFixedTimeoutIsSet(t *testing.T) {
 	var stderr bytes.Buffer
 	req, _, err := parseSend("send", []string{"gpt5.5", "hello"}, &stderr)

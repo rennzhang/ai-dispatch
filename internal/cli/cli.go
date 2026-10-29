@@ -496,7 +496,7 @@ func parseSend(command string, argv []string, stderr io.Writer) (contract.Dispat
 			req.Prompt = strings.Join(args[1:], " ")
 		}
 	}
-	req.ActivityTimeoutSeconds = defaultActivityTimeoutSeconds(*activityTimeout)
+	req.ActivityTimeoutSeconds = defaultActivityTimeoutSeconds(*activityTimeout, req.Surface)
 	disable, err := disableUserFacing(*wrapUp, *noWrapUp)
 	if err != nil {
 		return contract.DispatchRequest{}, *jsonResult, err
@@ -560,9 +560,16 @@ func containsArg(argv []string, target string) bool {
 	return false
 }
 
-func defaultActivityTimeoutSeconds(flagValue int) int {
+// defaultActivityTimeoutSeconds keeps "not set" distinct for the Desktop
+// channel: Codex App turns are not wall-clock capped, so the provider applies
+// its own pickup watchdog only when the flag was left unset. "cli" keeps the
+// existing "unset means disabled" behaviour.
+func defaultActivityTimeoutSeconds(flagValue int, surface string) int {
 	if flagValue >= 0 {
 		return flagValue
+	}
+	if surface == "app" {
+		return -1
 	}
 	return 0
 }

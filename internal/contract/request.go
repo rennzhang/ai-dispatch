@@ -1,5 +1,10 @@
 package contract
 
+// DispatchPromptMarker prefixes every dispatched prompt body. It is the source
+// marker receivers and rollout matching key on; treat a missing marker as
+// "not a dispatch message".
+const DispatchPromptMarker = "[ai-dispatch]"
+
 type DispatchRequest struct {
 	Command                string                       `json:"command"`
 	Target                 string                       `json:"target,omitempty"`

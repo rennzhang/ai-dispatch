@@ -98,7 +98,7 @@ func continueDesktopThread(ctx context.Context, req providers.BuildRequest, prom
 		return "", req.SessionID, err
 	}
 	focusDesktopThread(req.SessionID)
-	text, err := waitForQueuedReply(ctx, req.SessionID, rollout, before, prompt)
+	text, err := waitForQueuedReply(ctx, req, rollout, before, prompt)
 	if err != nil {
 		return "", req.SessionID, err
 	}
@@ -376,18 +376,46 @@ func focusDesktopThread(threadID string) {
 	_ = cmd.Run()
 }
 
-func waitForQueuedReply(ctx context.Context, threadID, rollout string, before []byte, prompt string) (string, error) {
+// appSurfacePickupLimit bounds how long a queued Desktop message may go without
+// any rollout activity before we call it a lost delivery. App turns themselves
+// are not wall-clock capped and, once ours landed, keep waiting unless the user
+// set --activity-timeout: a turn parked on a tool approval is legitimate.
+const appSurfacePickupLimit = 180 * time.Second
+
+func waitForQueuedReply(ctx context.Context, req providers.BuildRequest, rollout string, before []byte, prompt string) (string, error) {
+	idle := appSurfacePickupLimit // --activity-timeout unset: pickup guard only
+	if req.ActivityTimeoutSeconds > 0 {
+		idle = time.Duration(req.ActivityTimeoutSeconds) * time.Second
+	} else if req.ActivityTimeoutSeconds == 0 {
+		idle = 0 // explicit --activity-timeout 0 turns the guard off
+	}
+	started := time.Now()
+	lastChange := started
+	lastSize := -1
 	for {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		data, err := readActiveRollout(threadID, rollout)
+		data, err := readActiveRollout(req.SessionID, rollout)
 		if err != nil {
 			return "", fmt.Errorf("read codex rollout: %w", err)
 		}
-		text, ready, err := queuedReply(before, data, prompt)
-		if err != nil || ready {
-			return text, err
+		if size := len(data); size != lastSize {
+			if lastSize >= 0 {
+				lastChange = time.Now()
+			}
+			lastSize = size
+		}
+		scan, err := queuedReply(before, data, prompt)
+		if err != nil || scan.ready {
+			return scan.text, err
+		}
+		if idle > 0 && time.Since(lastChange) > idle {
+			if scan.landed && req.ActivityTimeoutSeconds <= 0 {
+				idle = 0 // landed turn: keep waiting, no inactivity limit
+			} else {
+				return "", queuedStallError(scan, time.Since(started), idle)
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -397,41 +425,101 @@ func waitForQueuedReply(ctx context.Context, threadID, rollout string, before []
 	}
 }
 
-func queuedReply(before, data []byte, prompt string) (string, bool, error) {
+func queuedStallError(scan queuedScan, waited, idle time.Duration) error {
+	if !scan.landed {
+		hint := ""
+		if scan.other != "" {
+			hint = fmt.Sprintf("; the thread received a different dispatch prompt instead (%s) — app_prompt_mismatch", scan.other)
+		}
+		return fmt.Errorf("codex desktop never picked up the queued message: no matching [ai-dispatch] turn in %s (app_not_picked_up)%s; open the thread in Codex Desktop, then retry or use --surface cli", waited.Round(time.Second), hint)
+	}
+	return fmt.Errorf("codex desktop turn stalled: rollout unchanged for %s while waiting %s (app_stalled)", idle, waited.Round(time.Second))
+}
+
+// queuedScan is what one rollout read tells us about the queued prompt.
+type queuedScan struct {
+	text   string // assistant text once the turn finished
+	ready  bool   // our turn finished successfully
+	landed bool   // a turn carrying our own stamped prompt showed up
+	other  string // a different stamped prompt landed instead (diagnostic)
+}
+
+func queuedReply(before, data []byte, prompt string) (queuedScan, error) {
 	known := map[string]bool{}
 	for _, msg := range userTurns(before) {
 		if msg.messageID != "" {
 			known[msg.messageID] = true
 		}
 	}
+	wantBody, wantMarked := dispatchPromptBody(prompt)
+	var scan queuedScan
 	var matches []userTurn
 	for _, msg := range userTurns(data) {
-		if msg.messageID == "" || known[msg.messageID] || msg.text != prompt {
+		if msg.messageID == "" || known[msg.messageID] {
 			continue
 		}
+		if wantMarked {
+			body, ok := dispatchPromptBody(msg.text)
+			if !ok {
+				continue // only turns we stamped can be our reply
+			}
+			if body != wantBody {
+				if scan.other == "" {
+					scan.other = promptSnippet(msg.text)
+				}
+				continue
+			}
+		} else if msg.text != prompt {
+			continue
+		}
+		scan.landed = true
 		matches = append(matches, msg)
 	}
 	if len(matches) == 0 {
-		return "", false, nil
+		return scan, nil
 	}
 	if len(matches) > 1 {
-		return "", false, fmt.Errorf("codex desktop queued prompt matched %d new turns", len(matches))
+		return scan, fmt.Errorf("codex desktop queued prompt matched %d new turns", len(matches))
 	}
 	match := matches[0]
 	if match.turnID == "" {
-		return "", false, nil
+		return scan, nil
 	}
 	end, ok := terminalByID(data, match.turnID)
 	if !ok {
-		return "", false, nil
+		return scan, nil
 	}
 	if end.failed {
-		return "", false, fmt.Errorf("codex desktop turn %s: %s", end.status, end.errText)
+		return scan, fmt.Errorf("codex desktop turn %s: %s", end.status, end.errText)
 	}
 	if strings.TrimSpace(end.text) == "" {
-		return "", false, fmt.Errorf("codex desktop turn completed without an assistant message")
+		return scan, fmt.Errorf("codex desktop turn completed without an assistant message")
 	}
-	return end.text, true, nil
+	scan.text = end.text
+	scan.ready = true
+	return scan, nil
+}
+
+// dispatchPromptBody splits a stamped prompt. The marker is a hard requirement:
+// only dispatcher-sent turns can match, and a missing marker means "not ours".
+// Only the blank line after the marker and trailing whitespace are normalized;
+// the body itself stays exact.
+func dispatchPromptBody(text string) (string, bool) {
+	if !strings.HasPrefix(text, contract.DispatchPromptMarker) {
+		return "", false
+	}
+	rest := strings.TrimPrefix(text, contract.DispatchPromptMarker)
+	rest = strings.TrimLeft(rest, "\r\n")
+	return strings.TrimRight(rest, " \t\r\n"), true
+}
+
+func promptSnippet(text string) string {
+	flat := strings.Join(strings.Fields(text), " ")
+	runes := []rune(flat)
+	if len(runes) <= 100 {
+		return flat
+	}
+	return string(runes[:100]) + "…"
 }
 
 type userTurn struct {

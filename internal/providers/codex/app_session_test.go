@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rennzhang/ai-dispatch/internal/contract"
 	"github.com/rennzhang/ai-dispatch/internal/providers"
 	"github.com/rennzhang/ai-dispatch/internal/routing"
 	"github.com/rennzhang/ai-dispatch/internal/runtime"
@@ -101,30 +102,95 @@ func TestQueuedReplyBindsOnlyTheMatchingTurn(t *testing.T) {
 	old := userLine("msg-old", "turn-old", "OLD") + terminalLine("task_complete", "turn-old", "OLD", "")
 	other := userLine("msg-other", "turn-other", "OTHER") + terminalLine("task_complete", "turn-other", "OTHER", "")
 	pending := old + other + userLine("msg-new", "turn-new", "PROMPT")
-	if text, ready, err := queuedReply([]byte(old), []byte(pending), "PROMPT"); err != nil || ready || text != "" {
-		t.Fatalf("text=%q ready=%v err=%v", text, ready, err)
+	if scan, err := queuedReply([]byte(old), []byte(pending), "PROMPT"); err != nil || scan.ready || scan.text != "" {
+		t.Fatalf("scan=%+v err=%v", scan, err)
 	}
 	done := pending + terminalLine("task_complete", "turn-new", "ANSWER", "")
-	text, ready, err := queuedReply([]byte(old), []byte(done), "PROMPT")
-	if err != nil || !ready || text != "ANSWER" {
-		t.Fatalf("text=%q ready=%v err=%v", text, ready, err)
+	scan, err := queuedReply([]byte(old), []byte(done), "PROMPT")
+	if err != nil || !scan.ready || scan.text != "ANSWER" {
+		t.Fatalf("scan=%+v err=%v", scan, err)
 	}
 }
 
 func TestQueuedReplyRejectsAmbiguousAndFailedTurns(t *testing.T) {
 	ambiguous := userLine("msg-a", "turn-a", "PROMPT") + userLine("msg-b", "turn-b", "PROMPT")
-	if _, _, err := queuedReply(nil, []byte(ambiguous), "PROMPT"); err == nil {
+	if _, err := queuedReply(nil, []byte(ambiguous), "PROMPT"); err == nil {
 		t.Fatal("two new copies of the same prompt must not be guessed")
 	}
 	failed := userLine("msg-new", "turn-new", "PROMPT") + terminalLine("task_failed", "turn-new", "", "boom")
-	if _, _, err := queuedReply(nil, []byte(failed), "PROMPT"); err == nil || !strings.Contains(err.Error(), "boom") {
+	if _, err := queuedReply(nil, []byte(failed), "PROMPT"); err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestQueuedReplyRequiresTheDispatchMarker(t *testing.T) {
+	prompt := stamped("PROMPT")
+	hand := userLine("msg-hand", "turn-hand", "PROMPT") + terminalLine("task_complete", "turn-hand", "HAND", "")
+	if scan, err := queuedReply(nil, []byte(hand), prompt); err != nil || scan.ready || scan.landed || scan.text != "" {
+		t.Fatalf("an unmarked turn must not bind: scan=%+v err=%v", scan, err)
+	}
+	// The marker survives while the blank line after it is collapsed.
+	sent := userLine("msg-sent", "turn-sent", "[ai-dispatch]\nPROMPT\n") + terminalLine("task_complete", "turn-sent", "ANSWER", "")
+	scan, err := queuedReply(nil, []byte(sent), prompt)
+	if err != nil || !scan.ready || scan.text != "ANSWER" {
+		t.Fatalf("scan=%+v err=%v", scan, err)
+	}
+}
+
+func TestQueuedReplyReportsForeignDispatchPrompt(t *testing.T) {
+	foreign := userLine("msg-other", "turn-other", stamped("SOMETHING ELSE"))
+	scan, err := queuedReply(nil, []byte(foreign), stamped("PROMPT"))
+	if err != nil || scan.ready || scan.landed || scan.other == "" {
+		t.Fatalf("scan=%+v err=%v", scan, err)
+	}
+}
+
+func TestWaitForQueuedReplyFailsWhenThreadNeverGetsThePrompt(t *testing.T) {
+	rollout := filepath.Join(t.TempDir(), "rollout.jsonl")
+	stale := sessionMetaLine("") + userLine("msg-old", "turn-old", stamped("OLD")) + terminalLine("task_complete", "turn-old", "OLD", "")
+	if err := os.WriteFile(rollout, []byte(stale), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	req := providers.BuildRequest{ActivityTimeoutSeconds: 1}
+	_, err := waitForQueuedReply(context.Background(), req, rollout, []byte(stale), stamped("PROMPT"))
+	if err == nil || !strings.Contains(err.Error(), "app_not_picked_up") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestWaitForQueuedReplyFailsWhenLandedTurnStalls(t *testing.T) {
+	rollout := filepath.Join(t.TempDir(), "rollout.jsonl")
+	landed := sessionMetaLine("") + userLine("msg-new", "turn-new", stamped("PROMPT"))
+	if err := os.WriteFile(rollout, []byte(landed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	req := providers.BuildRequest{ActivityTimeoutSeconds: 1}
+	_, err := waitForQueuedReply(context.Background(), req, rollout, nil, stamped("PROMPT"))
+	if err == nil || !strings.Contains(err.Error(), "app_stalled") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestWaitForQueuedReplyKeepsWaitingOnLandedTurnByDefault(t *testing.T) {
+	// A landed turn parked on a tool approval must not be killed unless the
+	// caller asked for an inactivity limit.
+	rollout := filepath.Join(t.TempDir(), "rollout.jsonl")
+	landed := sessionMetaLine("") + userLine("msg-new", "turn-new", stamped("PROMPT"))
+	if err := os.WriteFile(rollout, []byte(landed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err := waitForQueuedReply(ctx, providers.BuildRequest{ActivityTimeoutSeconds: -1}, rollout, nil, stamped("PROMPT"))
+	if err == nil || !strings.Contains(err.Error(), "deadline exceeded") {
+		t.Fatalf("a landed turn must keep waiting: err=%v", err)
 	}
 }
 
 func TestWaitForQueuedReplyReturnsReadError(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
-	_, err := waitForQueuedReply(context.Background(), "missing", filepath.Join(t.TempDir(), "missing.jsonl"), nil, "PROMPT")
+	req := providers.BuildRequest{SessionID: "missing"}
+	_, err := waitForQueuedReply(context.Background(), req, filepath.Join(t.TempDir(), "missing.jsonl"), nil, "PROMPT")
 	if err == nil {
 		t.Fatal("a rollout read error must stop the wait")
 	}
@@ -166,7 +232,7 @@ func TestLiveSegmentIsTheRolloutLeaf(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	text, err := waitForQueuedReply(ctx, thread, live, before, "PROMPT")
+	text, err := waitForQueuedReply(ctx, providers.BuildRequest{SessionID: thread}, live, before, "PROMPT")
 	if err != nil || text != "ANSWER" {
 		t.Fatalf("text=%q err=%v", text, err)
 	}
@@ -201,7 +267,7 @@ func TestQueuedReplyFollowsSegmentCreatedDuringWait(t *testing.T) {
 	}
 	done := make(chan reply, 1)
 	go func() {
-		text, err := waitForQueuedReply(ctx, thread, live, before, "PROMPT")
+		text, err := waitForQueuedReply(ctx, providers.BuildRequest{SessionID: thread}, live, before, "PROMPT")
 		done <- reply{text, err}
 	}()
 	time.Sleep(200 * time.Millisecond)
@@ -262,7 +328,7 @@ func TestTerminalOnNextSegmentStillMatchesTheQueuedTurn(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	text, err := waitForQueuedReply(ctx, thread, live, before, "PROMPT")
+	text, err := waitForQueuedReply(ctx, providers.BuildRequest{SessionID: thread}, live, before, "PROMPT")
 	if err != nil || text != "ANSWER" {
 		t.Fatalf("text=%q err=%v", text, err)
 	}
@@ -299,4 +365,9 @@ func userLine(messageID, turnID, text string) string {
 
 func terminalLine(kind, turnID, text, message string) string {
 	return fmt.Sprintf(`{"type":"event_msg","payload":{"type":%q,"turn_id":%q,"last_agent_message":%q,"message":%q}}`+"\n", kind, turnID, text, message)
+}
+
+// stamped renders a prompt the way stampPrompt does before delivery.
+func stamped(body string) string {
+	return contract.DispatchPromptMarker + "\n\n" + body
 }

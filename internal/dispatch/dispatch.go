@@ -714,7 +714,7 @@ func appSurface(surface string) bool {
 	return strings.EqualFold(strings.TrimSpace(surface), "app")
 }
 
-const dispatchPromptMarker = "[ai-dispatch]"
+const dispatchPromptMarker = contract.DispatchPromptMarker
 
 func stampPrompt(text string) string {
 	if strings.HasPrefix(text, dispatchPromptMarker+"\n\n") || text == dispatchPromptMarker {
