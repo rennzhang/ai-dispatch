@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.10.2
+
+- `--surface app` no longer hangs when the queued prompt never lands. While waiting, the channel keeps asking the rollout for the new user message that carries the `[ai-dispatch]` marker, so an unrelated turn finishing first can neither return the wrong text nor pin the wait. Without any rollout activity for 3 minutes it fails with `app_not_picked_up`, naming the mismatch (`app_prompt_mismatch`) when another dispatch prompt landed in the same thread instead.
+- A landed turn keeps waiting until it finishes unless `--activity-timeout` is set: a turn parked on a tool approval is legitimate. `--activity-timeout 0` still disables the watchdog on this channel.
+- `--activity-timeout` left unset now reaches the app channel as "unset" (`-1`) instead of `0`, so the pickup watchdog is actually active from the CLI. The `cli` channel keeps "unset means disabled".
+
 ## v0.10.1
 
 - `resume --surface app` follows a Desktop thread that continued into a new rollout segment (`rollout-<time>-<threadID>_<segmentID>.jsonl`). It anchors on the live segment, and while waiting it also reads continuations opened after that, so a reply written to a newer segment no longer waits until timeout.
