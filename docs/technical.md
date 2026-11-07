@@ -102,232 +102,154 @@ ai-dispatch  # 如果 ~/.local/bin 在 PATH 中
   runs/
   logs/
   bin/
+  desktop-locks/
 ```
 
 `bin/` 保存稳定 CLI wrapper 和按版本缓存的 release binary。`runs/` 保存每次调用的结构化结果。
 
-## CLI
-
-直接派发：
+## CLI 与单次执行
 
 ```bash
-ai-dispatch send opus "review current diff" \
-  --cwd "$PWD" --json-result --stream-progress --task-name review-opus
-```
+# config defaults：OMP / CLI / Sol
+ai-dispatch send --prompt-file /tmp/task.md --cwd "$PWD" \
+  --json-result --stream-progress --task-name default-task
 
-长 prompt：
+# 明确入口、渠道、模型
+ai-dispatch send codex "review current diff" --surface app --model sol \
+  --cwd "$PWD" --json-result --task-name app-review
+ai-dispatch send grok "review current diff" --model grok-4.7 \
+  --cwd "$PWD" --json-result --task-name grok-review
 
-```bash
-ai-dispatch send opus \
-  --prompt-file /tmp/review.md \
-  --cwd "$PWD" \
-  --json-result \
-  --stream-progress \
-  --task-name review-opus
-```
-
-继续上一轮：
-
-```bash
+# 从 dispatch 记录继承 provider/surface/model
 ai-dispatch resume --session-id <id> "focus on the delta" \
-  --json-result --stream-progress --task-name review-opus-r2
+  --json-result --stream-progress --task-name review-r2
 ```
 
-程序化调用应使用 `--json-result`。需要实时进度时加 `--stream-progress`。
+程序化调用用 `--json-result`，实时进度用 `--stream-progress`。target 是位置参数；省略 target 时用 `--prompt-file` 或 stdin 单独提供正文，避免把一句 prompt 当模型名。
 
-Codex 默认 `codex exec`。`--surface app` 把同一条任务送进 Codex Desktop；`resume` 必须再次带上，否则会用 CLI 续同一条 session。app 回合不套 `--timeout`，调用方取消仍然有效。其他 provider 拒绝 `app`。
+每次解析出唯一 provider/surface/native-model 后只执行一次。不遍历候选，不在 quota、network、runtime 等失败后切入口。显式 provider 名称保留给入口，不允许模型 key/alias 覆盖。已知模型 key/alias 通过所选入口的 targets 转换；未收录原生 ID 可以在显式 `provider --model` 下透传，但不推断能力。
 
-每次实际发出的正文，包括 stdin 和 `--prompt-file`，都会先写一行 `[ai-dispatch]`，空一行，再接原文。这是来源标记，不是指令。
+全局默认只补没有明确指定的选择。裸 `send codex` 不带模型时使用 Codex CLI 自己的默认模型。只指定逻辑模型时使用 config 默认 provider，缺少对应 target 就报错，不挑其他 provider。`provider:model` 冒号语法仍拒绝。
 
-## Reasoning effort
+`resume` 从已有运行记录继承 provider、surface、模型和已声明能力，显式冲突渠道/入口会报错。没有 dispatch 记录的 session 必须明确足够的目标信息；不能靠当前默认 OMP 接管未知 session。
 
-跨 provider 统一入口：
+CLI 默认墙钟上限为 7200 秒，`--timeout 0` 关闭；无活动超时默认关闭，显式 `--activity-timeout <seconds>` 才启用，stdout/stderr 增量会重置计时。App 回合不套 CLI 墙钟限制：未指定活动超时时使用投递拾取保护，落地后等终态；显式活动超时可以限制静默等待，`--activity-timeout 0` 关闭拾取保护。
+
+收到取消时，CLI 结束拥有的进程组并返回取消状态。App 只停止等待和临时后端；它不拥有 GUI 模型回合，必须保留“GUI 仍可能运行”的 warning，不能声称模型已停止。`exit_code=130` 表示 dispatch 调用取消，session 保留用于核对和恢复。
+
+## v2 配置与迁移
+
+只有 `~/.ai-dispatch/config.json` 承载可执行配置：
+
+- `defaults`：默认 OMP / CLI / `gpt-6.1-sol`。
+- `providers`：发现的绝对 executable 与 surfaces；不保存 CLI 版本号。
+- `models.<logical-key>`：aliases 与 `targets.<provider>.<surface>` 对象。
+- 每个 target 记录 `model` 原生 ID、`origin: scan|manual` 及可选 `efforts` / `fast`。
+
+模型可以对应多个 provider；targets 不表达顺序或 fallback。Magpie 只是具体 OMP selector 的来源之一。一个入口/渠道中的多个不同原生来源保留为不同 key，不用名字相似来合并。
+
+顶层 `version: 2` 是 schema 版本。严格校验未知字段、别名冲突、保留 provider 名和不支持的渠道。defaults/model 未发现或未配置时直接报错，不捏造 Sol 原生 ID。
 
 ```bash
-ai-dispatch send gpt5.6 "implement the fix" --effort xhigh --json-result
-ai-dispatch send codex "review current diff" --effort auto
+ai-dispatch config migrate --dry-run --format json
+ai-dispatch config migrate --apply --format json
+ai-dispatch providers scan --dry-run --format json
 ```
 
-合法值：`auto | none | minimal | low | medium | high | xhigh | max`。省略与 `--effort auto` 等价，表示不覆盖 CLI/模型默认档位。
+迁移默认预览，应用时先以独占文件保留原始备份，再原子替换；冲突不写。旧候选顺序取消，同 provider/surface 的不同模型须显式拆分。新 runtime 不在生成路径中读取 v1 数组，旧 runtime 也不应读取 v2 文件；二进制与配置一起验收、切换。备份和写锁不是第二份活跃路由。
 
-规则：
+配置写命令持锁后重新读取、合并和校验，避免扫描期间覆盖另一写入者的 defaults/manual 条目。详细 schema 与完整 JSON 见[配置参考](../skills/ai-dispatch/references/config.md)。`preferences.md` 只给 Agent 读场景偏好，不参与执行路由。
 
-- 只有当前候选确认支持时才传精确档位。
-- 能力以 config 候选 `efforts` 声明为准；未声明或不在列表内回到 `auto`，绝不映射相邻低档，也不因 effort 失败重跑 provider。
-- 结果字段：`requested_effort`、`applied_effort`、`effort_fallback_reason`。
-- effort fallback **不**设置 `degraded`；`degraded`/`degrade_reason` 只表示路由候选切换。
-- 旧的 `grok.effort` provider option 已移除；使用 `--effort`。
-
-完整设计见 [Reasoning Effort](reasoning-effort-design.md)。
-
-## Fast mode
-
-`--fast` 是所有 provider 共用的加速意图：
+## Provider 与模型扫描
 
 ```bash
-ai-dispatch send gpt5.6-luna "implement the fix" --fast --json-result
+ai-dispatch providers scan --dry-run --format json
+ai-dispatch providers scan --format json
+ai-dispatch providers scan --refresh --format json
 ```
 
-- Codex GPT-5.5/5.6 target 通过 `service_tier="priority"` 精确应用。
-- 不支持或无法确认的 provider 仍以标准速度执行当前候选，不重跑、不切换候选。
-- config `fast: true` 只是允许；不传 `--fast` 永远标准速度（`applied_fast=false`），声明不会让加速默认开启。
-- 结果字段：`requested_fast`、`applied_fast`、`fast_fallback_reason`；每个 route step 同时记录本候选是否应用。
-- fast capability fallback 不设置 `degraded`，也不写入通用 `warnings`；`degraded` 仍只表示路由候选切换。
-- 查询能力用 `ai-dispatch models resolve <target> --format json`，读取候选上声明的 `efforts` 与 `fast`（config 真源；顶层 `fast` 为 primary 是否声明 `fast: true`）。
+`--dry-run` 预览同一份候选 config 和完整报告；不带它才原子保存。`--refresh` 请求 OpenCode 刷新自己的模型缓存。扫描不生成内容、不安装/授权 provider、不修改 OMP/Magpie 等外部配置，但原生 CLI 可能维护自己的模型缓存。
+
+扫描遍历支持的七个 provider，统一按显式环境覆盖、已配置 executable、PATH 和已知安装位置找 CLI。显式路径失效不偷偷跳到另一安装。执行和发现使用同一套定位规则，目标模型/能力/executable 来自同一 config 快照。
+
+| 入口 | 模型发现 |
+| --- | --- |
+| OMP | `models --json --no-extensions`，保留完整 selector |
+| Grok / Cursor / Antigravity | 对应 CLI 的 `models` 接口 |
+| OpenCode | 对应模型目录接口及可选缓存刷新 |
+| Codex CLI | PATH/config 指定 binary 的 `model/list` |
+| Codex App | 注册 App bundled binary 的 `model/list` |
+| Claude | 无已接入的完整列举接口，明确报告 unsupported，保留手工映射 |
+
+未安装项只在扫描报告中出现。已配置路径失效、模型发现失败、不支持列举和成功空列表是不同状态。成功/确认未安装时清理该入口的扫描 target；失败/不支持时保留旧条目并给 warning。manual targets、aliases 和 defaults 保留。能力仅采用上游声明与 dispatch 档位集合的交集，未证实的 fast 不自动写 true。
+
+App 发现不启动 GUI、不创建线程、不切预设。`gui_selection: not_checked` 明确说明目录尚未证明 GUI 可选。扫描只说明入口与目录事实，不保证认证、额度、地区可用性或模型生成成功。
+
+## Codex Desktop 交付
+
+显式 `AI_DISPATCH_CODEX_APP_PID` 可选择目标。默认先排除带 `--user-data-dir` 的自定义 profile 实例，再按祖先、唯一 active 或唯一 GUI 窗口选择；仍有歧义就拒绝。只保留 flag 分类，不记录或输出其路径值。没有运行实例时可启动注册安装并绑定 PID。每个 URL 通过 PID-addressed GURL AppleEvent 投递，不用 `open -a bundle URL` 猜同 bundle 的目标进程；发送前核验 PID/bundle，之后仍以真实 turn 终态证明执行。设置桥直接用 `AXUIElementCreateApplication(pid)` 创建原生 AX 句柄，窗口和子节点全程保留真实 owner PID，不把 System Events 的窗口/entireContents 结果转成按名字引用；模型和速度直接 AXPress 菜单项；自定义强度控件没有可写 AXValue 或增减动作，使用 CGEventPostToPid 定向发送单个箭头，每步回读实际模型/level，并以菜单报告档数为上限。不使用全局键盘、CtrlShiftM 或固定16项循环。关闭菜单只使用定向该 PID 的 Escape，并核对 AXExpanded=false、恢复可读模型标签且无可见菜单项；不以同名 group 是否仍存在判断开关。所有定向键发送前还要用 CFEqual、标题和 owner PID 确认当前 FocusedWindow 就是已验证线程，不能把键送到同 PID 的其它会话。缺窗口、控件或 owner 不匹配时给出明确错误，不访问空对象。
+
+新线程使用客户端 bundled CLI 的短生命周期 stdio `app-server`：`thread/start` 创建元数据，`thread/name/set` 持久化空线程，进程退出释放所有权。空线程在首次入队前失败仍可 resume，不需要伪造历史 rollout。临时后端不调用 `turn/start` 或 `thread/resume`。
+
+准备阶段持有 App 实例跨进程锁，GUI 选择并验证请求 model/effort/speed；不可用组合在入队前报错并尝试恢复原预设。随后另起冷后端，只执行 `thread/read`、`thread/loaded/list`、`thread/queue/add`，入队前后验证未加载任何线程。后端退出后通过 wake 路由由 GUI 执行，普通线程路由导航。
+
+实例准备锁在等待模型前释放，其他线程可以准备；本 session 持独立锁防重复提交。首行 `[ai-dispatch]` 是来源标记，App 另带唯一 `dispatch-id`，对应 queue 的客户端消息 ID。即使正文相同，也只能由本次带唯一标记的用户消息及其 turn ID 收口。未确认投递保留 UUID-only pending 状态，取消/超时后不能盲目再次入队。
+
+收口必须有同一 turn 的成功终态和匹配 `turn_context` 中 model、effort、cwd、速度；失败终态不能被重放 completed 覆盖。元数据、open/queue 成功、部分文本、旧回合尾部均不是成功。`app_turn_active`、`app_session_busy`、`app_delivery_pending` 要求检查原线程。沿用当前 `CODEX_HOME`，不新建 profile，不退到独立 daemon 或 CLI 模型回合。
+
+rollout continuation 沿选定段的 `history_base` 祖先恢复状态，不拼 sibling 分支；断链/成环/歧义返回错误。本次回执保留物理段快照边界，不把祖先消息当新投递。协议依据保留于[上游队列处理](https://github.com/openai/codex/blob/rust-v0.167.0-alpha.3.2/codex-rs/app-server/src/request_processors/thread_queue_processor.rs)和[命名前持久化](https://github.com/openai/codex/blob/rust-v0.167.0-alpha.3.2/codex-rs/thread-store/src/local/update_thread_metadata.rs)。
+
+辅助功能授权、可用 GUI 预设和目标线程可见性需真实验收。目录读取或单元测试通过不能代替 App 实际交付。模型回合成功也不代表业务产物通过验收。
+
+## Reasoning effort 与 Fast
+
+```bash
+ai-dispatch send sol "implement the fix" --effort high --json-result
+ai-dispatch send codex "review the diff" --model sol --effort auto --json-result
+```
+
+合法 effort：`auto|none|minimal|low|medium|high|xhigh|max`。省略/auto 保留底层默认；精确档位以本次 target 的 `efforts` 为准，缺失/不支持时回 auto 并报告 `effort_fallback_reason`，不降相邻档、不重跑。
+
+`fast: true` 只允许用户显式 `--fast`，不传永远标准速度。缺失/不支持时以标准速度执行同一路径，返回 `fast_fallback_reason`。能力回退不设置路由降级，也不触发额外生成。
+
+查询本次目标及已知能力：
+
+```bash
+ai-dispatch models resolve sol --format json
+ai-dispatch models resolve codex --model sol --surface app --format json
+```
+
+解析包含 provider、surface、native model、executable、`model_listed` 及能力。未收录原生 ID 的 `model_listed=false`；不能据此声称它一定可运行或一定不支持。
 
 ## 结果字段
 
-调用方不要根据请求 target 推断真实结果。给用户看的卡片是 `user_facing_summary`，默认关闭。有 `agent_hint` 时必须原样粘贴，不要自己拼或重算耗时。最终回复按 session ID 只留最新一张，替换更早的卡片，不要叠多轮结果。在 `config.json` 设 `user_facing_summary: true` 或传 `--wrap-up` 后才会输出卡片和 `agent_hint`。
+以 `ok`、`status`、`text`、`provider_used`、`model_used`、`surface`、`session_id`、`failure_class`、`warnings` 和实际产物判断执行情况。另有 `requested_effort` / `applied_effort` / `effort_fallback_reason`、`requested_fast` / `applied_fast` / `fast_fallback_reason` 说明能力是否实际应用。
 
-- `agent_hint`
-- `user_facing_summary`
-- `duration_text`
-- `ok`
-- `status`
-- `text`
-- `provider_used`
-- `model_used`
-- `requested_target`
-- `route_trace`
-- `degraded`
-- `degrade_reason`
-- `requested_effort`
-- `applied_effort`
-- `effort_fallback_reason`
-- `requested_fast`
-- `applied_fast`
-- `fast_fallback_reason`
-- `session_id`
-- `failure_class`
+兼容历史读取的 `route_trace`、`route_steps`、`degraded` 字段不意味着新请求会遍历候选。新 runtime 每次只执行一个目标，失败保留原原因。取消时保留 session、已捕获输出及 App 未停止模型的警告。
 
-`user_facing_summary` 默认关闭。开启后由 CLI 收口时写好。第一行是块头 `[ai-dispatch result]` / `[ai-dispatch degraded]` / `[ai-dispatch failed]`，下面换行写 Target / Duration / Session ID；降级或失败才多一行。同一 session 的多轮 send/resume 都发新卡片，调用方最终回复只保留最新一张。Duration 文本同 `duration_text`（`hh:mm:ss`）。未使用 `--stream-progress` 时 stderr 再打同一块纯文本；使用 `--stream-progress` 时 stderr 保持 NDJSON，摘要在 JSON 和 terminal progress 事件里。`duration_ms` 仍是毫秒，给程序用。`session_id` 可用于后续 `resume`。`degraded=true` 表示 ai-dispatch 已按路由策略换过候选。effort fallback 和 fast capability fallback 都与路由降级独立。
+`user_facing_summary` 默认关闭。config 设置 true 或单次 `--wrap-up` 开启，返回 `agent_hint` 时调用 Agent 原样贴 `user_facing_summary`，同 session 只保留最新一张。Duration 使用 `duration_text`，程序计时用 `duration_ms`；不要重算或猜测模型身份。`--stream-progress` 下 stderr 保持 NDJSON，终态事件附摘要。
 
-## 模型路由
+## Provider 参数
 
-查看可用 target：
+Grok Build：
 
 ```bash
-ai-dispatch models
+ai-dispatch send grok "Reply exactly: OK" --model grok-4.7 \
+  --provider-opt grok.max-turns=1 --provider-opt grok.web-search=off --json-result
 ```
 
-解析真实路由：
+支持 `grok.max-turns`、`grok.web-search=on|off`、`grok.subagents=on|off`、`grok.approval=always|default`。默认不派生子代理，只有用户明确要求才开启。默认 approval=always 用于非交互执行；需要保留工具批准边界时改 default。推理使用顶层 `--effort`，不用旧 `grok.effort`。
+
+OMP：
 
 ```bash
-ai-dispatch models resolve opus --format json
+ai-dispatch send omp "Reply exactly: OK" --model magpie/codex/gpt-6.1-sol \
+  --provider-opt omp.session=none --json-result
 ```
 
-路由顺序：
+`omp.approval=always|default`，默认 always 追加 `--auto-approve`；`omp.session=persist|none`，none 追加 `--no-session`，不能同时 resume。`--effort` 映射 `--thinking`，none→off。子进程保留 `OMP_` / `PI_` 环境前缀；完整 selector 由 OMP 目录确认，Magpie 并非必选后端。
 
-```text
-显式 provider + --model
-> ~/.ai-dispatch/config.json 的 models
-> config 候选里的精确 model id
-> 裸 provider 名
-```
-
-config.json models 是唯一可执行短名路由。config 里没有的短名直接失败。需要强制 provider 语义时，使用 provider 名加显式 --model。
-
-`preferences.md` 只决定“某场景倾向选哪个短名”。`config.json models` 才是用户已经确认并主动加入的本机模型候选池。
-
-## Provider 扫描
-
-主动扫描 provider CLI：
-
-```bash
-ai-dispatch providers scan --format json
-ai-dispatch providers scan --refresh
-```
-
-扫描只更新 `~/.ai-dispatch/config.json` 的 `providers` 字段。它证明 provider CLI 看起来存在、能返回版本；不证明订阅、额度、地区封锁或 OpenRouter 单模型 endpoint 可用。
-
-## Grok provider opts
-
-Grok 的推荐入口是 `config.json models` 里的 `grok` 候选链：第一候选走本机 Grok Build CLI，后续候选可以走 OpenCode/OpenRouter 兜底。
-
-```bash
-ai-dispatch send grok "Reply exactly: OK" --json-result
-```
-
-推荐配置：
-
-```json
-{
-  "models": {
-    "grok": [
-      { "provider": "grok", "model": "grok-4.5" },
-      { "provider": "opencode", "model": "openrouter/x-ai/grok-4.5" }
-    ]
-  }
-}
-```
-
-可选参数统一走 `--provider-opt`：
-
-```bash
-ai-dispatch send grok "Reply exactly: OK" \
-  --provider-opt grok.max-turns=1 \
-  --provider-opt grok.web-search=off \
-  --json-result
-```
-
-支持的 key：`grok.max-turns`、`grok.web-search=on|off`、`grok.subagents=on|off`、`grok.approval=always|default`。推理档位请用顶层 `--effort`，不要用 `grok.effort`。
-
-默认 `grok.approval=always` 会向 Grok CLI 传 `--always-approve`，用于非交互式 dispatch。处理不可信 prompt 或不希望自动批准工具/文件操作时，传 `--provider-opt grok.approval=default`。
-
-旧的 `grok-build-0.1` 不再作为直接 target。需要原生 Grok Build CLI 时用 grok。
-
-## Cursor provider opts
-
-Cursor 走本机 `cursor-agent --print --output-format stream-json`，模型 ID 自带推理档位后缀（如 `claude-fable-5-thinking-high`、`claude-opus-5-thinking-high`），不接收 `--effort` 精确档位；需要其它档位时换用带对应后缀的短名。
-
-推荐配置：
-
-```json
-{
-  "models": {
-    "cursor-fable5": [
-      { "provider": "cursor", "model": "claude-fable-5-thinking-high" }
-    ],
-    "fable": [
-      { "provider": "claude", "model": "claude-fable-5" },
-      { "provider": "cursor", "model": "claude-fable-5-thinking-high" }
-    ]
-  }
-}
-```
-
-推荐入口：第一候选走 Claude 原生，后续候选走 Cursor 订阅做 fallback；`cursor-fable5` 这类短名直接强制走 Cursor。
-
-```bash
-ai-dispatch send cursor-fable5 "Reply exactly: OK" --json-result
-ai-dispatch send cursor-fable5 "Reply exactly: OK" --provider-opt cursor.approval=always
-```
-
-`cursor.approval` 支持 `default`（只信任工作区，不自动批准工具/文件操作）和 `always`（追加 `--force` 全自动执行）。默认 `default`。
-
-## OMP provider opts
-
-OMP 走本机 `omp --print --mode json`（oh-my-pi），适合 DeepSeek 等通过 OMP 配置的模型。`--effort` 映射到 `--thinking`（`none` → `off`，`auto` 不传）；能力仍以 config `models[].efforts` 声明为准，未声明时显式 `--effort` 回落 auto。不支持 `--fast`（未声明 `fast: true` 时以标准速度运行并给出 `fast_fallback_reason`）。`resume` 通过 `--resume <session-id>` 续接。
-
-```json
-{
-  "models": {
-    "deepseek-flash": [
-      { "provider": "omp", "model": "opencode-go/deepseek-flash", "efforts": ["high", "max"] }
-    ],
-    "dsf": [
-      { "provider": "omp", "model": "opencode-go/deepseek-flash", "efforts": ["high", "max"] }
-    ]
-  }
-}
-```
-
-```bash
-ai-dispatch send dsf "Reply exactly: OK" --effort high --json-result
-ai-dispatch send omp --model opencode-go/deepseek-flash "Reply exactly: OK" --provider-opt omp.approval=default
-```
-
-`omp.approval` 支持 `always`（默认，追加 `--auto-approve`）和 `default`（不自动批准工具/文件操作）。`omp.session` 支持 `persist`（默认，写入 omp 会话）和 `none`（追加 `--no-session`，不进 resume；不能和 resume 同时用）。二进制查找顺序：`AI_DISPATCH_OMP_BIN` → `PATH` 中的 `omp` → `~/.bun/bin/omp` → `~/.local/bin/omp`。子进程环境保留 `OMP_` / `PI_` 前缀变量。
+Cursor 使用 `cursor-agent --print --output-format stream-json`；模型 ID 自带推理后缀时保留原 ID，不再叠精确 `--effort`。`cursor.approval=default|always`，默认只信任工作区，always 追加全自动批准。
 
 ## Run history
 
@@ -383,7 +305,7 @@ AI_DISPATCH_SMOKE_CLAUDE=on scripts/go_provider_smoke.sh
 AI_DISPATCH_SMOKE_AGY=on scripts/go_agy_stress.sh
 AI_DISPATCH_ACCEPTANCE_TARGET=grok \
   AI_DISPATCH_ACCEPTANCE_PROVIDER=grok \
-  AI_DISPATCH_ACCEPTANCE_MODEL=grok-4.5 \
+  AI_DISPATCH_ACCEPTANCE_MODEL=grok-4.7 \
   scripts/go_provider_acceptance.sh
 scripts/go_grok_stress.sh
 ```

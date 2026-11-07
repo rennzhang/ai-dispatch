@@ -1,202 +1,182 @@
-# 配置
+# 配置、发现与模型对应关系
 
-## 配置初始化
+可执行配置只有 `~/.ai-dispatch/config.json`。v2 把默认选择、本机入口和模型对应关系分开存为对象；不再使用有顺序的候选数组，不自动遍历 fallback。
 
-`ai-dispatch` CLI 负责执行命令；skill wrapper 只是 Agent 调用入口，可以按需准备同一个 CLI runtime。Go CLI 负责 `~/.ai-dispatch/` 运行态。
+## 初始化与发现
 
-首次 `send`/`resume` 时，Go CLI 只确保 `config.json` 和 `preferences.md` 存在，然后继续执行原命令。这个路径不探测 provider。
-
-如果本次创建了 `config.json` 或 `preferences.md`，返回 JSON 附 `first_run: true`、`first_run_hint` 和 `first_run_setup` 字段。后续命令不再出现这些字段。
-
-手动 `init` 会创建配置并探测 provider：
+首次 `send`/`resume` 只确保最小 config 和偏好文件存在，不在生成请求中偷偷扫描。默认选择为 OMP / CLI / Sol（`gpt-6.1-sol`），但初始化不保证该模型已经可解析。先用 `init` 或明确扫描填充本机目录：
 
 ```bash
-ai-dispatch init --claude-transport print
-ai-dispatch init --force
-```
-
-## config.json
-
-路径：`~/.ai-dispatch/config.json`。
-
-```json
-{
-  "version": 1,
-  "claude_transport": "print",
-  "models": {
-    "mimo-pro": [
-      { "provider": "opencode", "model": "openrouter/xiaomi/mimo-v2.5-pro" },
-      { "provider": "opencode", "model": "opencode/mimo-v2.5-free" }
-    ],
-    "gpt5.5": [
-      { "provider": "codex", "model": "gpt-5.5", "fast": true }
-    ],
-    "gpt6.1-sol": [
-      {
-        "provider": "codex",
-        "model": "gpt-5.6-sol",
-        "efforts": ["high", "xhigh", "medium", "low", "max"],
-        "fast": true
-      }
-    ]
-  },
-  "providers": {
-    "claude": { "available": true, "version": "2.1.2" },
-    "codex": { "available": true, "version": "0.142.0" },
-    "opencode": { "available": true, "version": "1.17.3", "catalog_model_count": 42 },
-    "grok": { "available": true, "version": "grok 0.2.93" }
-  }
-}
-```
-
-### 字段说明
-
-| 字段 | 说明 |
-|---|---|
-| `claude_transport` | Claude 调用方式：`print`、`pty`、`auto`、`disabled` |
-| `user_facing_summary` | 是否在 send/resume 收口时写出给用户看的卡片。省略或 `false` 为关；`true` 开启。单次可用 `--wrap-up` / `--no-wrap-up` 覆盖 |
-| `models` | 用户已经确认并主动加入的本机模型候选池；key 是短名，value 是按顺序尝试的候选数组 |
-| `models.<name>[].provider` | 真实 provider：`codex`、`claude`、`opencode`、`omp`、`antigravity`、`grok`、`cursor` |
-| `models.<name>[].model` | 传给底层 provider CLI 的真实 model id |
-| `models.<name>[].efforts` | 可选。该候选声明支持的档位列表（亦为偏好挑选顺序）。不是默认 effort。省略/空 = 未声明，send 时精确 `--effort` 一律 applied auto |
-| `models.<name>[].fast` | 可选。`true` = 允许（显式传 `--fast` 时才应用，不传永远标准速度）；省略/`false` = 不允许 |
-| `providers` | provider CLI 诊断摘要，由 `init` 或 `providers scan` 更新 |
-| `providers.<name>.available` | provider CLI 是否看起来可执行 |
-| `providers.<name>.version` | provider CLI 版本 |
-| `providers.opencode.catalog_model_count` | opencode 已认证 provider 的 catalog 模型数量摘要，不证明逐模型可运行 |
-
-`models` 是可执行短名路由，也是用户自己维护的可用模型候选池；`preferences.md` 是场景偏好，`providers` 是诊断摘要。不要把三者混在一起。
-
-调用卡片默认关闭。要在 Agent 回复里看到 `[ai-dispatch result]` 这块，在 config.json 里打开：
-
-```json
-{
-  "user_facing_summary": true
-}
-```
-
-单次覆盖用 `--wrap-up` 或 `--no-wrap-up`。
-
-需要查看用户已经添加并主动维护的模型池时，读 `config.json` 的 `models` 字段：
-
-```bash
-ai-dispatch config show
-```
-
-`providers.opencode.catalog_model_count` 只是 catalog 数量摘要，不代表这些模型都经过用户确认或真实可调用。
-
-## 执行边界
-
-默认关闭“无输出超时”；只要 provider 没有明确失败或完成，dispatch 就继续等待。默认仍保留 7200 秒（120 分钟）总兜底，可用 `--timeout` 调整；传 `--timeout 0` 可关闭墙钟上限。只有显式传 `--activity-timeout` 才启用无活动超时。启用后，provider 的任意 stdout/stderr 增量事件都会重置计时，只有连续静默达到阈值才会终止；各 adapter 必须优先使用底层 CLI 的流式输出模式。
-
-收到 `SIGINT`、`SIGTERM` 或 `SIGHUP` 时，dispatch 会终止当前 provider 进程树、停止候选降级，并统一返回 canceled 结果（`exit_code=130`、`next_action=done`）。这里的 130 是 ai-dispatch 的“调用已取消”契约，不用于区分信号来源。
-
-顶层 `--effort` / `--fast` 对所有 provider 都是合法输入，但**能力真源是各候选的 config 声明**：
-
-- `efforts`：声明可精确应用的档位；列表顺序供偏好挑选。未声明或不在列表内 → applied `auto` + `effort_fallback_reason`。
-- `fast: true`：只是允许；仅在显式 `--fast` 时应用加速，不传 `--fast` 一律标准速度；未声明或 `false` → 标准速度 + `fast_fallback_reason`。
-- 不要把 hardcoded provider 提示列表当作执行权威；它们只可用于 init / detect-and-suggest，且须经用户确认后再写入 config。
-- 新增/更新/移除 models 候选时，询问用户是否配置 `efforts`/`fast`；未配置保持 auto。
-
-`models resolve <target> --format json` 会暴露各候选已声明的 `efforts` 与 `fast`。
-
-## Grok provider opts
-
-Grok 的推荐入口是 `config.json models` 里的 `grok` 候选链：第一候选走本机 Grok Build CLI，后续候选可以走 OpenCode/OpenRouter 兜底。
-
-```json
-{
-  "models": {
-    "grok": [
-      { "provider": "grok", "model": "grok-4.5" },
-      { "provider": "opencode", "model": "openrouter/x-ai/grok-4.5" }
-    ]
-  }
-}
-```
-
-```bash
-ai-dispatch send grok "Reply exactly: OK" \
-  --provider-opt grok.max-turns=1 \
-  --provider-opt grok.web-search=off \
-  --json-result
-```
-
-支持的 key：`grok.max-turns`、`grok.web-search=on|off`、`grok.subagents=on|off`、`grok.approval=always|default`。Grok 默认 `subagents=off`，只有用户明确要求被派发模型使用子代理时才传 `on`。推理档位使用顶层 `--effort`（`auto|none|minimal|low|medium|high|xhigh|max`），不要用已移除的 `grok.effort`。
-
-默认 `grok.approval=always` 会向 Grok CLI 传 `--always-approve`，用于非交互式 dispatch。处理不可信 prompt 或不希望自动批准工具/文件操作时，传 `--provider-opt grok.approval=default`。
-
-## OMP provider opts
-
-`omp` 是 oh-my-pi 的一等 provider（`omp --print --mode json`），不是把 DeepSeek 塞进 codex/OpenCode。
-
-```json
-{
-  "models": {
-    "deepseek-flash": [
-      { "provider": "omp", "model": "opencode-go/deepseek-flash", "efforts": ["high", "max"] }
-    ],
-    "dsf": [
-      { "provider": "omp", "model": "opencode-go/deepseek-flash", "efforts": ["high", "max"] }
-    ],
-    "deepseek-pro": [
-      { "provider": "omp", "model": "opencode-go/deepseek-v4-pro", "efforts": ["high", "max"] }
-    ]
-  }
-}
-```
-
-```bash
-ai-dispatch send deepseek-flash "…" --effort high --json-result
-ai-dispatch send dsf "…" --effort high --json-result
-ai-dispatch send deepseek-pro "…" --effort max --json-result
-ai-dispatch send omp --model opencode-go/deepseek-flash "…" --effort max
-```
-
-支持的 key：`omp.approval=always|default`，`omp.session=persist|none`。默认 `always` 传 `--auto-approve`，默认 `persist` 写会话。`none` 传 `--no-session`，一次性派发不进 `omp --resume`。`--effort` 映射为 omp `--thinking`；`none` 对应 `off`。
-
-
-## 模型解析顺序
-
-```text
-显式 provider + --model
-> config.json models 短名
-> config 候选里的精确 model id
-> 裸 provider 名
-```
-
-`config.json models` 命中数组时，按顺序尝试候选。`config`、`quota`、`network`、`timeout`、`runtime` 和无法归类的 provider 失败都会继续下一个候选；输入错误、取消、resume 和交互式工具权限拒绝不降级。只顺序遍历候选池一轮，不循环重试整个池。
-
-查看真实解析：
-
-```bash
-ai-dispatch models resolve mimo-pro --format json
-```
-
-## Provider 扫描
-
-```bash
+ai-dispatch init
+ai-dispatch providers scan --dry-run --format json
 ai-dispatch providers scan --format json
-ai-dispatch providers scan --refresh
 ```
 
-扫描只更新 `providers` 字段，不更新 `models`，不写完整模型列表，不记录扫描时间。
+`--dry-run` 只预览候选配置和各入口发现结果。普通扫描更新同一个 config。`--refresh` 请求 OpenCode 刷新其模型缓存；不是重试生成请求，也不会自动修改 OMP/Magpie 等外部配置。
 
-`providers scan` 不验证订阅、额度、地区封锁或 OpenRouter 单模型 endpoint。真实可运行性以 `send`/`resume` 的返回结果和 `failure_class` 为准。
+扫描范围为内置适配器：`omp`、`codex`、`grok`、`claude`、`cursor`、`opencode`、`antigravity`。先找 executable，再尝试该入口自己的模型列举能力：OMP `models --json`，Grok 等 `models`，Codex 对指定 binary 使用 `model/list`。不具备列举接口的入口明确标记 unsupported；不凭印象捏造模型。
 
-## 本地状态目录
+- 未安装的入口只出现在扫描报告，不写一堆 `available: false`。
+- 已有配置路径失效、模型接口失败或不支持列举，会报告限制，不伪装成“目录为空”。
+- 成功列举后替换该入口/渠道的 `origin: scan` target；未再出现的扫描条目可移除。
+- 读取失败/不支持时保留已有模型映射；手工 targets、aliases、defaults 始终保留。
+- 写入前持锁重新读取并合并，再校验、原子替换。扫描不消耗模型生成额度，不安装 CLI、不替用户登录。
+
+Codex CLI 和 App 使用各自 binary 的目录。App 只读 bundled 后端 `model/list`，不启动或聚焦 GUI，不建线程、不切模型；报告中的 `gui_selection: not_checked` 表示**目录条目尚未证明是 GUI 可选预设**。列出模型也不证明账号权限、剩余额度或单次请求可用。
+
+## v2 完整示例
+
+路径和模型仅演示结构，实际以本机发现和人工确认结果为准：
+
+```json
+{
+  "version": 2,
+  "defaults": {
+    "provider": "omp",
+    "surface": "cli",
+    "model": "gpt-6.1-sol"
+  },
+  "claude_transport": "print",
+  "user_facing_summary": false,
+  "providers": {
+    "omp": {
+      "executable": "/absolute/path/to/omp",
+      "surfaces": ["cli"]
+    },
+    "codex": {
+      "executable": "/absolute/path/to/codex",
+      "surfaces": ["cli", "app"]
+    },
+    "grok": {
+      "executable": "/absolute/path/to/grok",
+      "surfaces": ["cli"]
+    }
+  },
+  "models": {
+    "gpt-6.1-sol": {
+      "aliases": ["sol"],
+      "targets": {
+        "omp": {
+          "cli": {
+            "model": "magpie/codex/gpt-6.1-sol",
+            "origin": "manual",
+            "efforts": ["low", "medium", "high", "xhigh", "max"]
+          }
+        },
+        "codex": {
+          "cli": {
+            "model": "gpt-6.1-sol",
+            "origin": "manual",
+            "efforts": ["low", "medium", "high", "xhigh", "max"]
+          },
+          "app": {
+            "model": "gpt-6.1-sol",
+            "origin": "manual",
+            "efforts": ["low", "medium", "high"]
+          }
+        }
+      }
+    },
+    "grok-4.7": {
+      "aliases": ["grok4.7"],
+      "targets": {
+        "grok": {
+          "cli": {
+            "model": "grok-4.7",
+            "origin": "manual"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`targets` 是多对多支持关系，不是优先级；同一个模型可有多个入口，每个 provider/surface 最多一个原生 ID。相同逻辑模型在同一个入口有多种来源时，保留不同模型 key，不覆盖已有 selector，也不猜测“同名就是同一个模型”。Magpie 仅在具体 OMP selector 中出现。
+
+| 字段 | 含义 |
+| --- | --- |
+| `version` | 配置 schema 版本，与 CLI 版本无关 |
+| `defaults` | 没明确指定入口/模型时使用的选择 |
+| `providers.*.executable` | 已发现的绝对可执行路径；App 执行另定位其 bundled CLI |
+| `providers.*.surfaces` | 已发现入口渠道，不保证 GUI 当前预设或模型额度 |
+| `models.*.aliases` | 可选逻辑别名，大小写不区分；不得占用 provider 名称 |
+| `targets.<provider>.<surface>.model` | 该入口接受的完整原生模型 ID |
+| `origin` | `scan` 由扫描维护；`manual` 保留用户设置；手填省略时规范为 manual |
+| `efforts` | 此入口/渠道可精确应用的档位，非默认档位 |
+| `fast` | 只有 `true` 才允许显式 `--fast` 生效，非默认开启 |
+| `claude_transport` | `print`、`pty`、`auto`、`disabled` |
+| `user_facing_summary` | 开启可直接贴给用户的结果卡；默认 false |
+
+不保存 provider CLI 版本号或模型数量摘要。需要排障时读取实际 executable / 构建身份。未知字段、歧义别名和错误结构直接拒绝，不静默忽略配置。
+
+## 选择规则
+
+```bash
+# 无 target：defaults，prompt 单独提供
+ai-dispatch send --prompt-file /tmp/task.md --json-result
+
+# 模型 key/alias：使用 defaults.provider，不自动另找 provider
+ai-dispatch send sol "Review the diff" --json-result
+
+# 显式入口与模型/渠道：不受全局默认限制
+ai-dispatch send codex "Review the diff" --model sol --surface app --json-result
+ai-dispatch send grok "Review the diff" --model grok-4.7 --json-result
+```
+
+- `send codex`、`send grok` 等裸 provider 使用该 CLI 自己的模型默认值；不会把全局默认模型强加给显式入口。
+- 显式 `provider --model <native-id>` 可以透传目录未收录的原生 ID，解析返回 `model_listed=false`；目录不是白名单。
+- 逻辑别名若没有所选 provider/surface target，明确报错；不把别名假装成原生 ID，也不切换入口。
+- 只指定模型且默认入口不支持它时，报错提示明确入口，不挑另一个 target。
+- 不支持 `provider:model` / `model:provider` 冒号语法。
+- 每次只执行选中的一条路径，quota/network/runtime 等失败直接返回，保留原因。
+
+安全解析不生成内容：
+
+```bash
+ai-dispatch models resolve --format json
+ai-dispatch models resolve sol --format json
+ai-dispatch models resolve codex --model sol --surface app --format json
+```
+
+## Effort 与 Fast
+
+精确 effort 只在所选 target 的 `efforts` 声明内应用；未声明/不支持时为 auto，结果保留 `requested_effort`、`applied_effort`、`effort_fallback_reason`。合法档位为 `none|minimal|low|medium|high|xhigh|max`，省略或顶层 `auto` 表示不覆盖底层默认。扫描只保留与 dispatch 支持集合的交集，不能盲目同步上游新档位。
+
+`fast: true` 只允许显式 `--fast`，不传始终标准速度。未声明或 false 时返回 `fast_fallback_reason`；不会因此换 provider 或额外调用。原生 ID 透传但没有已知能力时，不捏造 efforts/fast 支持。
+
+## 会话恢复与 App
+
+恢复 dispatch 已记录的 session 时继承原 provider/surface/model；显式冲突的 provider 或 surface 被拒绝，避免 CLI 接管 App 线程。无可用历史时明确指定入口/渠道，不靠当前 defaults 猜测。
+
+App 通过目标 GUI 执行，模型目录和 GUI 可选预设分别验证。入队前核实模型/effort/速度，收口核实本次匹配 turn 的完成终态与 `turn_context`。取消或投递拾取失败后，保留 session 和待确认投递 UUID；先检查原线程，再恢复，不重复入队。
+
+收到取消时，CLI 路径清理拥有的子进程；App 只停止等待及临时后端，不保证 GUI 回合已停止，并明确保留 warning。`exit_code=130` 只表示 dispatch 调用被取消。
+
+## v1 迁移
+
+```bash
+ai-dispatch config migrate --dry-run --format json
+ai-dispatch config migrate --apply --format json
+ai-dispatch providers scan --dry-run --format json
+```
+
+默认仅预览。应用前备份原文件，再原子写入 v2；冲突不写。不同入口映射可以保留，但旧候选顺序取消；同一 provider/surface 有多个不同原生 ID 必须先拆成独立模型。占用 provider 名称的模型 key 会改名并给出警告。旧 provider 诊断没有 executable 路径，需扫描补齐。
+
+备份是恢复材料，不是第二个活跃配置。新 runtime 不在 send/resume 中自动解析旧数组；旧 runtime 不应读取已迁移的文件，切换二进制与配置要一起验收。
+
+## 状态目录
 
 ```text
 ~/.ai-dispatch/
   config.json
   preferences.md
+  bin/
   runs/
   logs/
-  bin/
+  desktop-locks/
 ```
 
-`bin/` 保存稳定 CLI 入口 `ai-dispatch` 和按版本缓存的 release binary。skill wrapper 可以调用自己的本地 binary，也可以按 `VERSION` 下载同一套 release binary。
+`preferences.md` 只给 Agent 提供场景偏好，不是第二套路由配置。`desktop-locks` 只用于 App 跨进程协调及 UUID-only 待确认状态，不存提示正文。
 
-## 真实 provider 执行
-
-`AI_DISPATCH_GO_PROVIDER_EXECUTION` 默认 `on`。开发/测试时设 `off` 可关闭真实 provider CLI 执行。
+`AI_DISPATCH_GO_PROVIDER_EXECUTION=off` 可关闭真实 provider 执行用于测试；disabled 结果不等于真实执行成功。构建身份使用 `ai-dispatch version --format json` 检查。

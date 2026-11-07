@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/rennzhang/ai-dispatch/internal/providerinfo"
 	"io"
 	"os"
 	"os/exec"
@@ -248,35 +249,14 @@ func readAgyLog(path string) (string, []string) {
 }
 
 func resolveAgyBinary(explicit string) (string, error) {
-	if strings.TrimSpace(explicit) != "" {
-		return executableAgyBinary(explicit, "agy binary override")
-	}
-	if env := strings.TrimSpace(os.Getenv("AI_DISPATCH_AGY_BIN")); env != "" {
-		return executableAgyBinary(env, "AI_DISPATCH_AGY_BIN override")
-	}
-	if path, err := exec.LookPath("agy"); err == nil {
-		return path, nil
-	}
-	if home := os.Getenv("HOME"); home != "" {
-		if path, err := executableAgyBinary(filepath.Join(home, ".local", "bin", "agy"), "agy fallback"); err == nil {
-			return path, nil
+	if explicit != "" {
+		bin, err := providerinfo.Executable(explicit)
+		if err != nil {
+			return "", fmt.Errorf("agy binary override: binary not found or not executable")
 		}
+		return bin, nil
 	}
-	return "", fmt.Errorf("agy binary not found; install agy or set AI_DISPATCH_AGY_BIN")
-}
-
-func executableAgyBinary(candidate string, label string) (string, error) {
-	if path, err := exec.LookPath(candidate); err == nil {
-		return path, nil
-	}
-	if !strings.Contains(candidate, string(os.PathSeparator)) {
-		return "", fmt.Errorf("%s is not executable or not found", label)
-	}
-	info, err := os.Stat(candidate)
-	if err != nil || info.IsDir() || info.Mode().Perm()&0o111 == 0 {
-		return "", fmt.Errorf("%s is not executable or not found", label)
-	}
-	return candidate, nil
+	return providerinfo.ResolveBinary("antigravity")
 }
 
 func agyRoot(explicit string) (string, error) {

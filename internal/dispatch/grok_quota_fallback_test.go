@@ -3,13 +3,12 @@ package dispatch
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/rennzhang/ai-dispatch/internal/contract"
 )
 
-func TestGrokQuotaFallsBackToConfiguredOpenCodeCandidate(t *testing.T) {
+func TestExplicitGrokQuotaNeverSwitchesToOpenCode(t *testing.T) {
 	home := t.TempDir()
 	binDir := t.TempDir()
 	grokBin := filepath.Join(t.TempDir(), "grok")
@@ -39,14 +38,11 @@ func TestGrokQuotaFallsBackToConfiguredOpenCodeCandidate(t *testing.T) {
 		Target:  "grok",
 		Prompt:  "hello",
 	})
-	if !result.OK || result.ProviderUsed != "opencode" || result.ModelUsed != "openrouter/x-ai/grok-4.5" {
+	if result.OK || result.ProviderUsed != "grok" || result.Status != contract.StatusQuota || result.Degraded {
 		t.Fatalf("result=%+v", result)
 	}
-	if !result.Degraded || !strings.Contains(result.DegradeReason, "quota") {
-		t.Fatalf("degrade fields missing: %+v", result)
-	}
-	if len(result.RouteSteps) != 2 || result.RouteSteps[0].Status != contract.StatusQuota || result.RouteSteps[1].Status != contract.StatusSuccess {
-		t.Fatalf("route steps=%+v", result.RouteSteps)
+	if len(result.RouteSteps) != 1 || result.RouteSteps[0].Provider != "grok" {
+		t.Fatalf("route=%+v", result.RouteSteps)
 	}
 }
 

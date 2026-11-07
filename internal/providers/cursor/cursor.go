@@ -5,12 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/rennzhang/ai-dispatch/internal/contract"
 	"github.com/rennzhang/ai-dispatch/internal/diagnostics"
+	"github.com/rennzhang/ai-dispatch/internal/providerinfo"
 	"github.com/rennzhang/ai-dispatch/internal/providers"
 	"github.com/rennzhang/ai-dispatch/internal/runtime"
 )
@@ -36,7 +35,7 @@ func (Provider) ResolveFast(_ context.Context, req providers.FastRequest) provid
 }
 
 func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
-	bin, err := cursorBinary()
+	bin, err := cursorBinary(req.Target.Executable)
 	if err != nil {
 		return runtime.CommandSpec{}, err
 	}
@@ -191,46 +190,8 @@ func parseCursorUsage(raw map[string]any) *contract.UsageInfo {
 	return usage
 }
 
-func cursorBinary() (string, error) {
-	if explicit := strings.TrimSpace(os.Getenv("AI_DISPATCH_CURSOR_BIN")); explicit != "" {
-		if path, err := executablePath(explicit, "AI_DISPATCH_CURSOR_BIN override"); err == nil {
-			return path, nil
-		} else {
-			return "", err
-		}
-	}
-	if path, err := exec.LookPath("cursor-agent"); err == nil {
-		return path, nil
-	}
-	home, err := os.UserHomeDir()
-	if err == nil {
-		for _, candidate := range []string{
-			filepath.Join(home, ".local", "bin", "cursor-agent"),
-			filepath.Join(home, ".cursor", "bin", "cursor-agent"),
-		} {
-			if path, err := executablePath(candidate, "cursor-agent fallback"); err == nil {
-				return path, nil
-			}
-		}
-	}
-	return "", fmt.Errorf("cursor binary not found; install Cursor Agent or set AI_DISPATCH_CURSOR_BIN")
-}
-
-func executablePath(candidate string, label string) (string, error) {
-	if path, err := exec.LookPath(candidate); err == nil {
-		return path, nil
-	}
-	if !strings.Contains(candidate, string(os.PathSeparator)) {
-		return "", fmt.Errorf("%s binary not found", label)
-	}
-	info, err := os.Stat(candidate)
-	if err != nil || info.IsDir() {
-		return "", fmt.Errorf("%s binary not found", label)
-	}
-	if info.Mode().Perm()&0o111 == 0 {
-		return "", fmt.Errorf("%s binary not found", label)
-	}
-	return candidate, nil
+func cursorBinary(configured ...string) (string, error) {
+	return providerinfo.ResolveBinary("cursor", configured...)
 }
 
 func routeLabel(provider string, model string) string {

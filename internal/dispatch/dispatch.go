@@ -22,7 +22,6 @@ import (
 	"github.com/rennzhang/ai-dispatch/internal/providers/omp"
 	"github.com/rennzhang/ai-dispatch/internal/providers/opencode"
 	"github.com/rennzhang/ai-dispatch/internal/routing"
-	"github.com/rennzhang/ai-dispatch/internal/runstore"
 	execruntime "github.com/rennzhang/ai-dispatch/internal/runtime"
 )
 
@@ -46,13 +45,13 @@ func ExecuteWithOptions(req contract.DispatchRequest, opts Options) contract.Pro
 		baseCtx, stopSignals = signal.NotifyContext(context.Background(), dispatchSignals()...)
 	}
 	defer stopSignals()
-	dispatchCtx, stopTimeout := executionContext(baseCtx, req)
-	defer stopTimeout()
-
 	target, err := resolveTarget(req)
 	if err != nil {
 		return completeDispatchResult(req, opts, contract.ErrorResult(contract.StatusError, contract.FailureInput, err.Error(), 2))
 	}
+	req.Surface = target.Surface
+	dispatchCtx, stopTimeout := executionContext(baseCtx, req)
+	defer stopTimeout()
 	if result, done := contextTargetResult(dispatchCtx, target, elapsedMS(dispatchStarted)); done {
 		return completeDispatchResult(req, opts, result)
 	}
@@ -67,7 +66,7 @@ func ExecuteWithOptions(req contract.DispatchRequest, opts Options) contract.Pro
 		applyFastResolution(&result, fastResolution)
 		return completeDispatchResult(req, opts, result)
 	}
-	result := executeCandidates(dispatchCtx, req, target, opts)
+	result := executeSelectedWith(dispatchCtx, req, target, opts, executeTarget)
 	if req.OutputFile != "" && result.OK {
 		if err := output.WriteFile(req.OutputFile, result); err != nil {
 			failure := contract.FailureRuntime
@@ -85,6 +84,9 @@ func ExecuteWithOptions(req contract.DispatchRequest, opts Options) contract.Pro
 }
 
 func completeDispatchResult(req contract.DispatchRequest, opts Options, result contract.ProviderResult) contract.ProviderResult {
+	if !result.OK && result.ExitCode == 0 {
+		result.ExitCode = 1
+	}
 	result.RequestedFast = req.Fast
 	if result.RequestedEffort == "" {
 		result.RequestedEffort = contract.NormalizeEffort(req.Effort)
@@ -92,8 +94,7 @@ func completeDispatchResult(req contract.DispatchRequest, opts Options, result c
 	if result.AppliedEffort == "" {
 		result.AppliedEffort = contract.EffortAuto
 	}
-	// Fill empty route-step effort only. Candidate-level values already stamped
-	// by executeTarget must be preserved across multi-candidate merges.
+	// Preserve the adapter's actual effort in the execution receipt.
 	for i := range result.RouteSteps {
 		if result.RouteSteps[i].AppliedEffort == "" {
 			result.RouteSteps[i].AppliedEffort = result.AppliedEffort
@@ -111,98 +112,22 @@ func completeDispatchResult(req contract.DispatchRequest, opts Options, result c
 	return result
 }
 
-func executeCandidates(ctx context.Context, req contract.DispatchRequest, target routing.DispatchTarget, opts Options) contract.ProviderResult {
-	return executeCandidatesWith(ctx, req, target, opts, executeTarget)
-}
-
+// executeSelectedWith runs exactly the resolved entry. Errors never select a
+// different provider, model, or delivery surface.
 type targetExecutor func(context.Context, contract.DispatchRequest, routing.DispatchTarget, Options) contract.ProviderResult
 
-func executeCandidatesWith(ctx context.Context, req contract.DispatchRequest, target routing.DispatchTarget, opts Options, execute targetExecutor) contract.ProviderResult {
-	candidates := routing.CandidateTargets(target)
-	var routeTrace []string
-	var routeSteps []contract.RouteStep
-	var degradeReasons []string
-	var routeWarnings []string
-	var lastResult contract.ProviderResult
-	var lastCandidate routing.DispatchTarget
-	lastRouteStepStart := 0
-	haveLastResult := false
-	pendingDegradeReason := ""
-	for i, candidate := range candidates {
-		if ctx.Err() != nil && haveLastResult {
-			switch {
-			case errors.Is(ctx.Err(), context.Canceled):
-				applyCanceledContract(&lastResult, lastCandidate, lastResult.DurationMS)
-			case errors.Is(ctx.Err(), context.DeadlineExceeded):
-				applyTimeoutContract(&lastResult, lastCandidate, lastResult.DurationMS)
-			}
-			routeSteps = append(routeSteps[:lastRouteStepStart], lastResult.RouteSteps...)
-			return finalizeCandidateResult(lastResult, target.Requested, routeTrace, routeSteps, degradeReasons, routeWarnings)
-		}
-		if result, done := contextTargetResult(ctx, candidate, 0); done {
-			routeTrace = append(routeTrace, result.RouteTrace...)
-			routeSteps = append(routeSteps, result.RouteSteps...)
-			return finalizeCandidateResult(result, target.Requested, routeTrace, routeSteps, degradeReasons, routeWarnings)
-		}
-		if pendingDegradeReason != "" {
-			degradeReasons = append(degradeReasons, pendingDegradeReason)
-			pendingDegradeReason = ""
-		}
-		attemptReq := req
-		if i > 0 {
-			attemptReq.SessionID = ""
-			attemptReq.SessionProvider = ""
-		}
-		attemptStarted := time.Now()
-		result := execute(ctx, attemptReq, candidate, opts)
-		attemptDuration := maxDurationMS(result.DurationMS, elapsedMS(attemptStarted))
-		switch {
-		case errors.Is(ctx.Err(), context.Canceled):
-			applyCanceledContract(&result, candidate, attemptDuration)
-		case errors.Is(ctx.Err(), context.DeadlineExceeded):
-			applyTimeoutContract(&result, candidate, attemptDuration)
-		}
-		routeTrace = append(routeTrace, result.RouteTrace...)
-		lastRouteStepStart = len(routeSteps)
-		routeSteps = append(routeSteps, result.RouteSteps...)
-		for _, warning := range result.Warnings {
-			routeWarnings = appendUnique(routeWarnings, warning)
-		}
-		if ctx.Err() != nil {
-			return finalizeCandidateResult(result, target.Requested, routeTrace, routeSteps, degradeReasons, routeWarnings)
-		}
-		if result.OK {
-			return finalizeCandidateResult(result, target.Requested, routeTrace, routeSteps, degradeReasons, routeWarnings)
-		}
-		if i == len(candidates)-1 || !shouldTryNextCandidate(req, result) {
-			return finalizeCandidateResult(result, target.Requested, routeTrace, routeSteps, degradeReasons, routeWarnings)
-		}
-		lastResult = result
-		lastCandidate = candidate
-		haveLastResult = true
-		pendingDegradeReason = degradeReason(result, candidates[i+1])
+func executeSelectedWith(ctx context.Context, req contract.DispatchRequest, target routing.DispatchTarget, opts Options, execute targetExecutor) contract.ProviderResult {
+	if result, done := contextTargetResult(ctx, target, 0); done {
+		return result
 	}
-	return contract.ErrorResult(contract.StatusError, contract.FailureConfig, "no route candidates available", 2)
-}
-
-func finalizeCandidateResult(result contract.ProviderResult, requested string, routeTrace []string, routeSteps []contract.RouteStep, degradeReasons []string, routeWarnings []string) contract.ProviderResult {
-	if requested != "" {
-		result.RequestedTarget = requested
-	}
-	if len(routeTrace) > 0 {
-		result.RouteTrace = routeTrace
-	}
-	if len(routeSteps) > 0 {
-		result.RouteSteps = routeSteps
-	}
-	result.Warnings = append([]string{}, routeWarnings...)
-	if len(degradeReasons) > 0 {
-		reason := strings.Join(degradeReasons, "; ")
-		result.Degraded = true
-		result.DegradeReason = reason
-		if !containsExact(result.Warnings, reason) {
-			result.Warnings = append([]string{reason}, result.Warnings...)
-		}
+	started := time.Now()
+	result := execute(ctx, req, target, opts)
+	duration := maxDurationMS(result.DurationMS, elapsedMS(started))
+	switch {
+	case errors.Is(ctx.Err(), context.Canceled):
+		applyCanceledContract(&result, target, duration)
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		applyTimeoutContract(&result, target, duration)
 	}
 	return result
 }
@@ -308,16 +233,21 @@ func executeTarget(baseCtx context.Context, req contract.DispatchRequest, target
 		applyFastResolution(&result, fastResolution)
 		return result
 	}
+	run := runProviderCommand(baseCtx, req, target.Provider, spec, opts)
+	return providerResultFromRun(p, run, buildReq, buildTarget, resolution, fastResolution)
+}
+
+func runProviderCommand(baseCtx context.Context, req contract.DispatchRequest, provider string, spec execruntime.CommandSpec, opts Options) execruntime.RunResult {
 	spec.CWD = req.CWD
 	var emitter *progress.Emitter
 	hooks := execruntime.StreamHooks{}
 	if req.StreamProgress && opts.ProgressWriter != nil {
-		emitter = progress.NewEmitter(target.Provider, opts.ProgressWriter)
-		emitter.Emit(contract.ProgressSession, "session", target.Provider+" session started")
+		emitter = progress.NewEmitter(provider, opts.ProgressWriter)
+		emitter.Emit(contract.ProgressSession, "session", provider+" session started")
 		hooks.Stdout = emitter.FeedStdout
 		hooks.Stderr = emitter.FeedStderr
 	}
-	run := withProviderExecutionLock(baseCtx, target.Provider, func() execruntime.RunResult {
+	run := withProviderExecutionLock(baseCtx, provider, func() execruntime.RunResult {
 		return execruntime.RunProcess(baseCtx, spec, execruntime.RunOptions{
 			FixedTimeout:    0,
 			ActivityTimeout: seconds(req.ActivityTimeoutSeconds),
@@ -326,7 +256,7 @@ func executeTarget(baseCtx context.Context, req contract.DispatchRequest, target
 	if emitter != nil {
 		emitter.Close()
 	}
-	return providerResultFromRun(p, run, buildReq, buildTarget, resolution, fastResolution)
+	return run
 }
 
 func providerResultFromRun(p providers.Provider, run execruntime.RunResult, buildReq providers.BuildRequest, target routing.DispatchTarget, resolution providers.EffortResolution, fastResolution providers.FastResolution) contract.ProviderResult {
@@ -509,103 +439,6 @@ func contextTargetResult(ctx context.Context, target routing.DispatchTarget, dur
 	}
 }
 
-func shouldTryNextCandidate(req contract.DispatchRequest, result contract.ProviderResult) bool {
-	if req.Surface == "app" {
-		return false
-	}
-	if req.Command != "send" || result.OK {
-		return false
-	}
-	if isPermissionRejection(result.Stderr) {
-		return false
-	}
-	if result.FailureClass == nil {
-		return result.Status == contract.StatusQuota || result.Status == contract.StatusTimeout || result.Status == contract.StatusDisabled || result.Status == contract.StatusNotFound
-	}
-	switch *result.FailureClass {
-	case contract.FailureConfig,
-		contract.FailureQuota,
-		contract.FailureTimeout,
-		contract.FailureNetwork,
-		contract.FailureRuntime,
-		contract.FailureUnknown:
-		return true
-	default:
-		return false
-	}
-}
-
-func isPermissionRejection(message string) bool {
-	lower := strings.ToLower(message)
-	return strings.Contains(lower, "permission requested") ||
-		strings.Contains(lower, "auto-rejecting")
-}
-
-func degradeReason(previous contract.ProviderResult, fallback routing.DispatchTarget) string {
-	failure := ""
-	if previous.FailureClass != nil {
-		failure = "/" + string(*previous.FailureClass)
-	}
-	previousLabel := previous.ProviderUsed
-	if previous.ModelUsed != "" {
-		previousLabel += ":" + previous.ModelUsed
-	}
-	label := fallback.Provider
-	if fallback.Model != "" {
-		label += ":" + fallback.Model
-	}
-	return fmt.Sprintf("%s failed with %s%s; switched to %s", previousLabel, previous.Status, failure, label)
-}
-
-func resolveTarget(req contract.DispatchRequest) (routing.DispatchTarget, error) {
-	if req.Command == "resume" {
-		target := routing.DispatchTarget{Source: "session"}
-		record, ok, err := runstore.FindBySessionID("", req.SessionID)
-		if err != nil {
-			return routing.DispatchTarget{}, err
-		}
-		if ok && record.Result != nil {
-			target.Requested = firstNonEmpty(record.Result.RequestedTarget, record.Result.ProviderUsed)
-			target.Provider = record.Result.ProviderUsed
-			target.Model = firstNonEmpty(req.Model, record.Result.ModelUsed)
-		}
-		if req.Target != "" {
-			resolved, err := routing.Resolve(req.Target, req.Model)
-			if err != nil {
-				return routing.DispatchTarget{}, err
-			}
-			if target.Provider != "" && resolved.Provider != target.Provider {
-				return routing.DispatchTarget{}, fmt.Errorf("session_id %q belongs to provider %q, not %q", req.SessionID, target.Provider, resolved.Provider)
-			}
-			target = resolved
-			target.Source = "session"
-		} else if req.SessionProvider != "" {
-			resolved, err := routing.Resolve(req.SessionProvider, req.Model)
-			if err != nil {
-				return routing.DispatchTarget{}, err
-			}
-			if target.Provider != "" && resolved.Provider != target.Provider {
-				return routing.DispatchTarget{}, fmt.Errorf("session_id %q belongs to provider %q, not %q", req.SessionID, target.Provider, resolved.Provider)
-			}
-			target.Provider = resolved.Provider
-			target.Model = firstNonEmpty(resolved.Model, target.Model)
-			target.Requested = firstNonEmpty(target.Requested, req.SessionProvider)
-		} else if req.Model != "" && target.Provider != "" {
-			resolved, err := routing.Resolve(target.Provider, req.Model)
-			if err != nil {
-				return routing.DispatchTarget{}, err
-			}
-			target.Model = resolved.Model
-		}
-		if target.Provider == "" {
-			return routing.DispatchTarget{}, fmt.Errorf("cannot infer provider for session_id %q; pass --target or --session-provider", req.SessionID)
-		}
-		target.Requested = firstNonEmpty(target.Requested, target.Provider)
-		return target, nil
-	}
-	return routing.Resolve(req.Target, req.Model)
-}
-
 func providerFor(name string) (providers.Provider, bool) {
 	switch name {
 	case "codex":
@@ -627,16 +460,12 @@ func providerFor(name string) (providers.Provider, bool) {
 	}
 }
 
-// SupportsFast reports whether the primary candidate declares fast in config.
-// Capability comes from ModelRoute.fast via the provider ResolveFast path.
+// SupportsFast reports the selected entry's explicit fast capability.
 func SupportsFast(ctx context.Context, target routing.DispatchTarget) bool {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	primary := target
-	if candidates := routing.CandidateTargets(target); len(candidates) > 0 {
-		primary = candidates[0]
-	}
 	p, ok := providerFor(primary.Provider)
 	if !ok {
 		return false
@@ -657,6 +486,9 @@ func buildFailure(err error) (contract.FailureClass, int) {
 }
 
 func ensureRouteMetadata(result *contract.ProviderResult, target routing.DispatchTarget, durationMS int64) {
+	if result.Surface == "" {
+		result.Surface = target.Surface
+	}
 	if result.RequestedTarget == "" {
 		result.RequestedTarget = target.Requested
 	}

@@ -231,7 +231,7 @@ prepare_entry_environment() {
   local ai_home="$entry_root/ai-dispatch"
   mkdir -p "$user_home" "$ai_home" "$entry_root/xdg-config" "$entry_root/xdg-data" \
     "$entry_root/xdg-cache" "$entry_root/codex" "$entry_root/opencode"
-  printf '%s\n' '{"version":1,"claude_transport":"print","models":{},"providers":{}}' >"$ai_home/config.json"
+  printf '%s\n' '{"version":2,"defaults":{"provider":"omp","surface":"cli","model":"gpt-6.1-sol"},"claude_transport":"print","models":{},"providers":{}}' >"$ai_home/config.json"
   printf '%s\n' '# acceptance preferences' >"$ai_home/preferences.md"
   ENTRY_AI_HOME="$ai_home"
   ENTRY_ENV=(
@@ -358,6 +358,22 @@ for entry in direct dev path codex claude fallback homebrew-layout npm; do
     echo "$entry: output file does not contain provider result" >&2
     exit 1
   fi
+
+  # A missing explicitly selected entry must fail instead of trying another provider.
+  set +e
+  env -i "${ENTRY_ENV[@]}" \
+    AI_DISPATCH_GROK_BIN="$WORK/missing-grok" \
+    "${ENTRY_COMMAND[@]}" send grok "fail closed acceptance" \
+      --model grok-4.7 --json-result --timeout 10 \
+      >"$WORK/$entry-fail-closed.json"
+  fail_closed_code=$?
+  set -e
+  if [[ "$fail_closed_code" -eq 0 ]]; then
+    echo "$entry: missing selected provider returned success" >&2
+    exit 1
+  fi
+  validate_json "$WORK/$entry-fail-closed.json" \
+    'value.ok === false && value.degraded === false && value.provider_used === "grok" && value.model_used === "grok-4.7" && Array.isArray(value.route_steps) && value.route_steps.length === 1 && value.route_steps[0].provider === "grok" && value.route_steps[0].model === "grok-4.7"'
 
   mkdir -p "$home/runs/run-corrupt"
   printf '%s\n' '{not-json' >"$home/runs/run-corrupt/run.json"

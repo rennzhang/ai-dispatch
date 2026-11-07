@@ -9,6 +9,7 @@ import (
 
 	"github.com/rennzhang/ai-dispatch/internal/contract"
 	"github.com/rennzhang/ai-dispatch/internal/diagnostics"
+	"github.com/rennzhang/ai-dispatch/internal/providerinfo"
 	"github.com/rennzhang/ai-dispatch/internal/providers"
 	"github.com/rennzhang/ai-dispatch/internal/runtime"
 )
@@ -26,8 +27,12 @@ func (Provider) ResolveFast(_ context.Context, req providers.FastRequest) provid
 }
 
 func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
+	binary, err := providerinfo.ResolveBinary("codex", req.Target.Executable)
+	if err != nil {
+		return runtime.CommandSpec{}, err
+	}
 	args := []string{
-		"codex",
+		binary,
 		"exec",
 		"--dangerously-bypass-approvals-and-sandbox",
 		"--json",
@@ -65,16 +70,25 @@ func (Provider) Parse(run runtime.RunResult, req providers.BuildRequest) contrac
 	stdout := string(run.Stdout)
 	text, sessionID := parseCodexStream(stdout)
 	surface := ""
+	var appWarnings []string
+	completionError := codexTurnFailure(stdout)
 	if envelope, ok := parseAppEnvelope(stdout); ok {
 		text = envelope.Text
 		sessionID = envelope.SessionID
 		surface = envelope.Surface
+		appWarnings = envelope.Warnings
+		if envelope.State != "completed" || envelope.Error != "" {
+			completionError = firstNonEmpty(envelope.Error, "codex desktop has no confirmed completed turn (app_completion_unconfirmed); resume the same session after checking the Desktop thread")
+		}
+	}
+	if sessionID == "" {
+		sessionID = req.SessionID
 	}
 	status := contract.StatusSuccess
 	var failure *contract.FailureClass
 	next := contract.NextDone
 	stderr := string(run.Stderr)
-	ok := run.ExitCode == 0 && strings.TrimSpace(text) != ""
+	ok := run.ExitCode == 0 && strings.TrimSpace(text) != "" && completionError == ""
 	if run.TimedOut {
 		status = contract.StatusTimeout
 		f := contract.FailureTimeout
@@ -85,6 +99,9 @@ func (Provider) Parse(run runtime.RunResult, req providers.BuildRequest) contrac
 			stderr = diagnostics.TimeoutMessage("Codex", run.FixedTimeout, run.ActivityTimeout, req.TimeoutSeconds, req.ActivityTimeoutSeconds)
 		}
 	} else if !ok {
+		if completionError != "" {
+			stderr = completionError
+		}
 		classified := diagnostics.Classify("Codex", stdout, stderr, run.Error)
 		status = classified.Status
 		f := classified.Class
@@ -95,8 +112,8 @@ func (Provider) Parse(run runtime.RunResult, req providers.BuildRequest) contrac
 			stderr = diagnostics.NoResultMessage("Codex", stdout, string(run.Stderr), run.ExitCode)
 		}
 	}
-	warnings := []string{}
-	if surface == surfaceApp {
+	warnings := appWarnings
+	if surface == surfaceApp && ok {
 		warnings = append(warnings, "delivered through Codex Desktop, not codex exec")
 	}
 	return contract.ProviderResult{
@@ -138,6 +155,46 @@ func parseAppEnvelope(stdout string) (appEnvelope, bool) {
 		return appEnvelope{}, false
 	}
 	return envelope, true
+}
+
+// codexTurnFailure keeps current-turn failures authoritative even when the
+// process exits zero after emitting partial assistant output.
+func codexTurnFailure(stdout string) string {
+	active, failure := "", ""
+	for _, line := range strings.Split(stdout, "\n") {
+		var event struct {
+			Type    string `json:"type"`
+			TurnID  string `json:"turn_id"`
+			Payload struct {
+				Type    string `json:"type"`
+				TurnID  string `json:"turn_id"`
+				Reason  string `json:"reason"`
+				Message string `json:"message"`
+			} `json:"payload"`
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal([]byte(line), &event) != nil {
+			continue
+		}
+		kind, id := event.Type, event.TurnID
+		if kind == "event_msg" {
+			kind, id = event.Payload.Type, event.Payload.TurnID
+		}
+		if kind == "turn.started" || kind == "task_started" {
+			active, failure = id, ""
+			continue
+		}
+		if active != "" && id != "" && active != id {
+			continue
+		}
+		switch kind {
+		case "turn.failed", "turn.interrupted", "turn.aborted", "turn_aborted", "task_failed", "turn_failed", "task_interrupted", "turn_interrupted":
+			failure = fmt.Sprintf("codex turn %s: %s; session is retained for recovery", kind, firstNonEmpty(event.Payload.Reason, event.Payload.Message, event.Error.Message, kind))
+		}
+	}
+	return failure
 }
 
 func parseCodexStream(stdout string) (string, string) {
@@ -198,7 +255,7 @@ func routeLabel(provider string, model string) string {
 }
 
 // SuggestEffortLevels returns optional init/detect hints for known Codex models.
-// Execution never consults this list; config ModelRoute.efforts is authority.
+// Execution never consults this list; config ModelTarget.efforts is authority.
 func SuggestEffortLevels(model string) []string {
 	switch strings.ToLower(strings.TrimSpace(model)) {
 	case "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
@@ -209,7 +266,7 @@ func SuggestEffortLevels(model string) []string {
 }
 
 // SuggestFast returns an optional init/detect hint for known Codex models.
-// Execution never consults this; config ModelRoute.fast is authority.
+// Execution never consults this; config ModelTarget.fast is authority.
 func SuggestFast(model string) bool {
 	switch strings.ToLower(strings.TrimSpace(model)) {
 	case "gpt-5.5", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":

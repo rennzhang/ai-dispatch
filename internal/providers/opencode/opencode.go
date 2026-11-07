@@ -5,15 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/rennzhang/ai-dispatch/internal/contract"
 	"github.com/rennzhang/ai-dispatch/internal/diagnostics"
+	"github.com/rennzhang/ai-dispatch/internal/providerinfo"
 	"github.com/rennzhang/ai-dispatch/internal/providers"
 	"github.com/rennzhang/ai-dispatch/internal/runtime"
 )
@@ -38,7 +37,7 @@ func (Provider) ResolveFast(_ context.Context, req providers.FastRequest) provid
 }
 
 // SuggestEffortLevels queries opencode catalog variants as an optional init hint.
-// Execution never consults this; config ModelRoute.efforts is authority.
+// Execution never consults this; config ModelTarget.efforts is authority.
 func SuggestEffortLevels(ctx context.Context, model string) []string {
 	variants, ok, _ := lookupOpenCodeVariants(ctx, model)
 	if !ok {
@@ -60,7 +59,7 @@ func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 		return runtime.CommandSpec{}, fmt.Errorf("unsupported opencode.format: %s", format)
 	}
 
-	bin, err := openCodeBinary()
+	bin, err := openCodeBinary(req.Target.Executable)
 	if err != nil {
 		return runtime.CommandSpec{}, err
 	}
@@ -281,41 +280,8 @@ func resetOpenCodeModelsCacheForTest() {
 	openCodeModelsCache = map[string]openCodeModelsCacheEntry{}
 }
 
-func openCodeBinary() (string, error) {
-	if explicit := strings.TrimSpace(os.Getenv("AI_DISPATCH_OPENCODE_BIN")); explicit != "" {
-		if path, err := executablePath(explicit, "AI_DISPATCH_OPENCODE_BIN override"); err == nil {
-			return path, nil
-		} else {
-			return "", err
-		}
-	}
-	if path, err := exec.LookPath("opencode"); err == nil {
-		return path, nil
-	}
-	home, err := os.UserHomeDir()
-	if err == nil {
-		if path, err := executablePath(filepath.Join(home, ".opencode", "bin", "opencode"), "opencode fallback"); err == nil {
-			return path, nil
-		}
-	}
-	return "", fmt.Errorf("opencode binary not found; install OpenCode or set AI_DISPATCH_OPENCODE_BIN")
-}
-
-func executablePath(candidate string, label string) (string, error) {
-	if path, err := exec.LookPath(candidate); err == nil {
-		return path, nil
-	}
-	if !strings.Contains(candidate, string(os.PathSeparator)) {
-		return "", fmt.Errorf("%s is not executable or not found", label)
-	}
-	info, err := os.Stat(candidate)
-	if err != nil || info.IsDir() {
-		return "", fmt.Errorf("%s is not executable or not found", label)
-	}
-	if info.Mode().Perm()&0o111 == 0 {
-		return "", fmt.Errorf("%s is not executable or not found", label)
-	}
-	return candidate, nil
+func openCodeBinary(configured ...string) (string, error) {
+	return providerinfo.ResolveBinary("opencode", configured...)
 }
 
 func (Provider) Parse(run runtime.RunResult, req providers.BuildRequest) contract.ProviderResult {

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,6 +22,8 @@ type rolloutSeg struct {
 	parentID string
 }
 
+var errRolloutNotFound = errors.New("codex desktop thread has no rollout yet")
+
 // findRollout returns the segment Codex is writing now. Walk order hits the
 // oldest file first; continuations live in later rollout-<time>-<threadID>_<segmentID>.jsonl
 // files, and the live one is the leaf of the history_base chain.
@@ -31,7 +34,7 @@ func findRollout(threadID string) (string, error) {
 	}
 	cur, ok := currentRollout(segs)
 	if !ok {
-		return "", fmt.Errorf("codex desktop thread %s has no rollout yet; create it with send --surface app first", threadID)
+		return "", fmt.Errorf("%w: %s; open the same thread in Codex Desktop", errRolloutNotFound, threadID)
 	}
 	return cur.path, nil
 }
@@ -79,7 +82,11 @@ func threadRollouts(threadID string) ([]rolloutSeg, error) {
 }
 
 func isThreadRollout(name, threadID string) bool {
-	return strings.HasPrefix(name, "rollout-") && strings.HasSuffix(name, ".jsonl") && strings.Contains(name, threadID)
+	if !strings.HasPrefix(name, "rollout-") || !strings.HasSuffix(name, ".jsonl") || threadID == "" {
+		return false
+	}
+	base := strings.TrimSuffix(name, ".jsonl")
+	return strings.HasSuffix(base, "-"+threadID) || strings.Contains(base, "-"+threadID+"_")
 }
 
 func rolloutSegmentID(name, threadID string) string {
@@ -160,6 +167,55 @@ func currentRollout(segs []rolloutSeg) (rolloutSeg, bool) {
 	return leaves[len(leaves)-1], true
 }
 
+// rolloutHistoryPaths returns only the anchor's ancestors in parent-to-child
+// order. Queued reply matching keeps its separate, current-segment boundary.
+func rolloutHistoryPaths(threadID, anchor string) ([]string, error) {
+	segs, err := threadRollouts(threadID)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]rolloutSeg, len(segs))
+	ambiguous := make(map[string]bool)
+	var current rolloutSeg
+	found := false
+	for _, seg := range segs {
+		if _, duplicate := byID[seg.id]; duplicate {
+			ambiguous[seg.id] = true
+		}
+		byID[seg.id] = seg
+		if seg.path == anchor {
+			current, found = seg, true
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("codex rollout history anchor missing: %s", anchor)
+	}
+	var paths []string
+	seen := make(map[string]bool)
+	for {
+		if seen[current.id] {
+			return nil, fmt.Errorf("codex rollout history cycle at segment %s", current.id)
+		}
+		seen[current.id] = true
+		paths = append(paths, current.path)
+		if current.parentID == "" {
+			break
+		}
+		parentID := current.parentID
+		if ambiguous[parentID] {
+			return nil, fmt.Errorf("codex rollout history has ambiguous parent segment %s", parentID)
+		}
+		current, found = byID[parentID]
+		if !found {
+			return nil, fmt.Errorf("codex rollout history parent missing: %s", parentID)
+		}
+	}
+	for left, right := 0, len(paths)-1; left < right; left, right = left+1, right-1 {
+		paths[left], paths[right] = paths[right], paths[left]
+	}
+	return paths, nil
+}
+
 // readActiveRollout reads the anchor segment plus any continuation opened
 // after the before-snapshot. Ancestor files stay out of the scan: their user
 // turns are not in the snapshot and would look like a second copy of the prompt.
@@ -195,9 +251,8 @@ func rolloutSpan(anchor string, segs []rolloutSeg) []string {
 		}
 	}
 	if anchorIdx < 0 {
-		if cur, ok := currentRollout(segs); ok {
-			return []string{cur.path}
-		}
+		// Losing the bound segment is a read error, never permission to switch
+		// to another branch and consume its old completion.
 		return []string{anchor}
 	}
 	paths := []string{segs[anchorIdx].path}

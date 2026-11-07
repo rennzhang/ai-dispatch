@@ -93,6 +93,9 @@ func Classify(provider string, stdout string, stderr string, runError string) Fa
 	}
 
 	if message == "" {
+		message = structuredFailureMessage(stdout)
+	}
+	if message == "" {
 		message = strings.TrimSpace(runError)
 	}
 	if message == "" {
@@ -102,6 +105,45 @@ func Classify(provider string, stdout string, stderr string, runError string) Fa
 		message = "agy completed without output; verify agy login and Chrome authorization before retrying"
 	}
 	return Failure{Status: status, Class: class, Stderr: message}
+}
+
+// Error events often arrive on stdout while stderr contains nothing. Only
+// extract explicit error fields; never expose prompt, reasoning, or partial
+// assistant content as an error diagnostic.
+func structuredFailureMessage(stdout string) string {
+	last := ""
+	for _, line := range strings.Split(stdout, "\n") {
+		var event map[string]any
+		if json.Unmarshal([]byte(line), &event) != nil {
+			continue
+		}
+		for _, object := range []map[string]any{event, objectField(event, "message"), objectField(event, "error")} {
+			for _, key := range []string{"errorMessage", "error_message"} {
+				if value, ok := object[key].(string); ok && strings.TrimSpace(value) != "" {
+					last = strings.TrimSpace(value)
+				}
+			}
+		}
+		if kind, _ := event["type"].(string); kind == "error" {
+			for _, key := range []string{"error", "message"} {
+				if value, ok := event[key].(string); ok && strings.TrimSpace(value) != "" {
+					last = strings.TrimSpace(value)
+				}
+			}
+			if value, ok := objectField(event, "error")["message"].(string); ok {
+				last = strings.TrimSpace(value)
+			}
+		}
+	}
+	if len(last) > 2000 {
+		last = last[:2000]
+	}
+	return last
+}
+
+func objectField(object map[string]any, key string) map[string]any {
+	value, _ := object[key].(map[string]any)
+	return value
 }
 
 func NoResultMessage(provider string, stdout string, stderr string, exitCode int) string {

@@ -5,12 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/rennzhang/ai-dispatch/internal/contract"
 	"github.com/rennzhang/ai-dispatch/internal/diagnostics"
+	"github.com/rennzhang/ai-dispatch/internal/providerinfo"
 	"github.com/rennzhang/ai-dispatch/internal/providers"
 	"github.com/rennzhang/ai-dispatch/internal/runtime"
 )
@@ -29,7 +28,7 @@ func (Provider) ResolveFast(_ context.Context, req providers.FastRequest) provid
 }
 
 func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
-	bin, err := ompBinary()
+	bin, err := ompBinary(req.Target.Executable)
 	if err != nil {
 		return runtime.CommandSpec{}, err
 	}
@@ -121,7 +120,8 @@ func (Provider) Parse(run runtime.RunResult, req providers.BuildRequest) contrac
 	var failure *contract.FailureClass
 	next := contract.NextDone
 	stderr := string(run.Stderr)
-	ok := run.ExitCode == 0 && strings.TrimSpace(text) != ""
+	complete, failed := ompTerminalState(stdout)
+	ok := run.ExitCode == 0 && complete && !failed && strings.TrimSpace(text) != ""
 	if run.TimedOut {
 		status = contract.StatusTimeout
 		f := contract.FailureTimeout
@@ -168,8 +168,45 @@ func (Provider) Parse(run runtime.RunResult, req providers.BuildRequest) contrac
 	}
 }
 
+func ompTerminalState(stdout string) (complete, failed bool) {
+	for _, line := range strings.Split(stdout, "\n") {
+		var event map[string]any
+		if json.Unmarshal([]byte(line), &event) != nil {
+			continue
+		}
+		kind, _ := event["type"].(string)
+		if kind == "error" {
+			complete = false
+			failed = true
+			continue
+		}
+		message, _ := event["message"].(map[string]any)
+		if role, _ := message["role"].(string); role != "assistant" {
+			continue
+		}
+		if kind == "message_start" || kind == "message_update" {
+			complete = false
+			failed = false
+		}
+		if kind != "message_end" && kind != "turn_end" {
+			continue
+		}
+		switch reason, _ := message["stopReason"].(string); reason {
+		case "error", "aborted":
+			complete = false
+			failed = true
+		case "toolUse":
+			complete = false
+			failed = false
+		case "stop", "length":
+			complete = true
+			failed = false
+		}
+	}
+	return complete, failed
+}
+
 func parseOMPStream(stdout string) (text string, sessionID string, model string, usage *contract.UsageInfo) {
-	texts := []string{}
 	for _, line := range strings.Split(stdout, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "{") {
@@ -186,9 +223,9 @@ func parseOMPStream(stdout string) (text string, sessionID string, model string,
 		}
 		if message, ok := event["message"].(map[string]any); ok {
 			if role, _ := message["role"].(string); role == "assistant" {
-				if t := assistantText(message); t != "" {
-					texts = append(texts, t)
-				}
+				// Keep even an empty final message: an earlier tool-call or
+				// partial answer must never become the final answer.
+				text = assistantText(message)
 				if m, ok := message["model"].(string); ok && m != "" {
 					if provider, ok := message["provider"].(string); ok && provider != "" {
 						model = provider + "/" + m
@@ -203,19 +240,8 @@ func parseOMPStream(stdout string) (text string, sessionID string, model string,
 				}
 			}
 		}
-		if event["type"] == "turn_end" || event["type"] == "agent_end" {
-			if message, ok := event["message"].(map[string]any); ok {
-				if t := assistantText(message); t != "" {
-					texts = append(texts, t)
-				}
-			}
-		}
 	}
-	if len(texts) == 0 {
-		return "", sessionID, model, usage
-	}
-	// Prefer the last assistant text chunk (final turn).
-	return texts[len(texts)-1], sessionID, model, usage
+	return text, sessionID, model, usage
 }
 
 func assistantText(message map[string]any) string {
@@ -259,46 +285,8 @@ func parseOMPUsage(raw map[string]any) *contract.UsageInfo {
 	return usage
 }
 
-func ompBinary() (string, error) {
-	if explicit := strings.TrimSpace(os.Getenv("AI_DISPATCH_OMP_BIN")); explicit != "" {
-		if path, err := executablePath(explicit, "AI_DISPATCH_OMP_BIN override"); err == nil {
-			return path, nil
-		} else {
-			return "", err
-		}
-	}
-	if path, err := exec.LookPath("omp"); err == nil {
-		return path, nil
-	}
-	home, err := os.UserHomeDir()
-	if err == nil {
-		for _, candidate := range []string{
-			filepath.Join(home, ".bun", "bin", "omp"),
-			filepath.Join(home, ".local", "bin", "omp"),
-		} {
-			if path, err := executablePath(candidate, "omp fallback"); err == nil {
-				return path, nil
-			}
-		}
-	}
-	return "", fmt.Errorf("omp binary not found; install oh-my-pi (omp) or set AI_DISPATCH_OMP_BIN")
-}
-
-func executablePath(candidate string, label string) (string, error) {
-	if path, err := exec.LookPath(candidate); err == nil {
-		return path, nil
-	}
-	if !strings.Contains(candidate, string(os.PathSeparator)) {
-		return "", fmt.Errorf("%s binary not found", label)
-	}
-	info, err := os.Stat(candidate)
-	if err != nil || info.IsDir() {
-		return "", fmt.Errorf("%s binary not found", label)
-	}
-	if info.Mode().Perm()&0o111 == 0 {
-		return "", fmt.Errorf("%s binary not found", label)
-	}
-	return candidate, nil
+func ompBinary(configured ...string) (string, error) {
+	return providerinfo.ResolveBinary("omp", configured...)
 }
 
 func routeLabel(provider string, model string) string {
@@ -316,7 +304,7 @@ func sanitizePromptFileError(err error) string {
 }
 
 // SuggestEffortLevels returns optional init/detect hints for known OMP models.
-// Execution never consults this list; config ModelRoute.efforts is authority.
+// Execution never consults this list; config ModelTarget.efforts is authority.
 func SuggestEffortLevels(model string) []string {
 	id := strings.ToLower(strings.TrimSpace(model))
 	if i := strings.LastIndex(id, "/"); i >= 0 {

@@ -13,6 +13,7 @@ import (
 	"github.com/rennzhang/ai-dispatch/internal/config"
 	"github.com/rennzhang/ai-dispatch/internal/contract"
 	"github.com/rennzhang/ai-dispatch/internal/diagnostics"
+	"github.com/rennzhang/ai-dispatch/internal/providerinfo"
 	"github.com/rennzhang/ai-dispatch/internal/providers"
 	"github.com/rennzhang/ai-dispatch/internal/runtime"
 )
@@ -49,8 +50,12 @@ func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 }
 
 func buildAPI(req providers.BuildRequest) (runtime.CommandSpec, error) {
+	bin, err := providerinfo.ResolveBinary("claude", req.Target.Executable)
+	if err != nil {
+		return runtime.CommandSpec{}, err
+	}
 	args := []string{
-		"claude",
+		bin,
 		"-p",
 		"--setting-sources",
 		"user,project",
@@ -100,7 +105,11 @@ func buildPTY(req providers.BuildRequest) (runtime.CommandSpec, error) {
 			return runtime.CommandSpec{}, fmt.Errorf("cannot allocate Claude session id: %w", err)
 		}
 	}
-	claudeArgs := []string{"claude", "--dangerously-skip-permissions"}
+	bin, err := providerinfo.ResolveBinary("claude", req.Target.Executable)
+	if err != nil {
+		return runtime.CommandSpec{}, err
+	}
+	claudeArgs := []string{bin, "--dangerously-skip-permissions"}
 	if shouldPassClaudeModel(req) {
 		claudeArgs = append(claudeArgs, "--model", req.Target.Model)
 	}

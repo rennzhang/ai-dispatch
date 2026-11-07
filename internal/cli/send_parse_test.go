@@ -185,14 +185,14 @@ func TestDefaultActivityTimeoutIsDisabledForAllProviders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if req.ActivityTimeoutSeconds != 0 {
+	if req.ActivityTimeoutSeconds != -1 {
 		t.Fatalf("activity_timeout=%d", req.ActivityTimeoutSeconds)
 	}
 	req, _, err = parseSend("send", []string{"gpt5.5", "hello"}, &stderr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if req.ActivityTimeoutSeconds != 0 {
+	if req.ActivityTimeoutSeconds != -1 {
 		t.Fatalf("activity_timeout=%d", req.ActivityTimeoutSeconds)
 	}
 	req, _, err = parseSend("send", []string{"--activity-timeout", "0", "mimo-openrouter-pro", "hello"}, &stderr)
@@ -288,7 +288,6 @@ func TestOMPProviderOptWhitelist(t *testing.T) {
 	if req.ProviderOpts["omp"]["session"] != "none" {
 		t.Fatalf("req=%+v", req)
 	}
-
 
 	_, _, err = parseSend("send", []string{"omp", "hello", "--provider-opt", "omp.thinking=high"}, &stderr)
 	if err == nil || !strings.Contains(err.Error(), "unsupported provider option") {
@@ -500,7 +499,7 @@ func TestNoWrapUpFlagDisablesUserFacingSummary(t *testing.T) {
 func TestConfigDisablesUserFacingSummary(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, "config.json")
-	if err := os.WriteFile(path, []byte(`{"version":1,"claude_transport":"print","user_facing_summary":false}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"version":2,"claude_transport":"print","user_facing_summary":false}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("AI_DISPATCH_HOME", home)
@@ -523,7 +522,7 @@ func TestConfigDisablesUserFacingSummary(t *testing.T) {
 func TestConfigEnablesUserFacingSummary(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, "config.json")
-	if err := os.WriteFile(path, []byte(`{"version":1,"claude_transport":"print","user_facing_summary":true}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"version":2,"claude_transport":"print","user_facing_summary":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("AI_DISPATCH_HOME", home)
@@ -551,7 +550,7 @@ func TestConfigEnablesUserFacingSummary(t *testing.T) {
 func TestWrapUpFlagOverridesConfigOff(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, "config.json")
-	if err := os.WriteFile(path, []byte(`{"version":1,"claude_transport":"print","user_facing_summary":false}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"version":2,"claude_transport":"print","user_facing_summary":false}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("AI_DISPATCH_HOME", home)
@@ -583,7 +582,7 @@ func TestWrapUpAndNoWrapUpConflict(t *testing.T) {
 func TestNoWrapUpOverridesConfigTrue(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, "config.json")
-	if err := os.WriteFile(path, []byte(`{"version":1,"claude_transport":"print","user_facing_summary":true}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"version":2,"claude_transport":"print","user_facing_summary":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("AI_DISPATCH_HOME", home)

@@ -5,7 +5,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/rennzhang/ai-dispatch/internal/routing"
+	"github.com/rennzhang/ai-dispatch/internal/config"
+	"sort"
 )
 
 func guide(argv []string, stdout io.Writer, stderr io.Writer) int {
@@ -28,52 +29,34 @@ func guide(argv []string, stdout io.Writer, stderr io.Writer) int {
 }
 
 func printModelGuide(stdout io.Writer) error {
-	models, err := routing.ConfiguredModels()
+	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "# 模型指南")
+	fmt.Fprintln(stdout, "# 模型与入口")
 	fmt.Fprintln(stdout, "")
-	fmt.Fprintln(stdout, "用户偏好读取：")
-	fmt.Fprintln(stdout, "")
-	fmt.Fprintln(stdout, "```bash")
-	fmt.Fprintln(stdout, "ai-dispatch preferences path")
-	fmt.Fprintln(stdout, "ai-dispatch preferences show")
-	fmt.Fprintln(stdout, "```")
-	fmt.Fprintln(stdout, "")
-	fmt.Fprintln(stdout, "真实路由检查：")
-	fmt.Fprintln(stdout, "")
-	fmt.Fprintln(stdout, "```bash")
-	fmt.Fprintln(stdout, "ai-dispatch models")
-	fmt.Fprintln(stdout, "ai-dispatch models resolve <target> --format json")
-	fmt.Fprintln(stdout, "```")
-	fmt.Fprintln(stdout, "")
-	fmt.Fprintln(stdout, "请求的 target 只是意图，真实执行结果必须看返回 JSON 里的 `provider_used`、`model_used`、`requested_target`、`route_trace`、`degraded`、`degrade_reason`。")
-	fmt.Fprintln(stdout, "")
-	fmt.Fprintln(stdout, "`~/.ai-dispatch/config.json` 的 `models` 是唯一可执行短名路由。config 里没有的短名会直接失败。")
-	fmt.Fprintln(stdout, "")
-	fmt.Fprintln(stdout, "## Provider")
-	fmt.Fprintln(stdout, "")
-	fmt.Fprintln(stdout, "- `codex`：默认调用 `codex exec`。只有显式 `--surface app` 才把同一套模型和 effort 送进 Codex Desktop；继续聊用 `resume --surface app`。app 回合不受 `--timeout` 限制，取消仍会停下。")
-	fmt.Fprintln(stdout, "- `claude`：调用 `claude -p`。")
-	fmt.Fprintln(stdout, "- `opencode`：调用 `opencode run`。")
-	fmt.Fprintln(stdout, "- `antigravity`：调用 `agy --print`。")
-	fmt.Fprintln(stdout, "- `grok`：调用 Grok CLI。")
-	fmt.Fprintln(stdout, "- `cursor`：调用 `cursor-agent`。")
-	fmt.Fprintln(stdout, "- `omp`：调用 oh-my-pi / `omp`。")
-	fmt.Fprintln(stdout, "")
-	fmt.Fprintln(stdout, "## Configured short names")
-	fmt.Fprintln(stdout, "")
-	if len(models) == 0 {
-		fmt.Fprintln(stdout, "当前 config.json 没有 models。把确认能用的短名写进 ~/.ai-dispatch/config.json。")
-		return nil
+	fmt.Fprintf(stdout, "默认：%s / %s / %s\n", cfg.Defaults.Provider, cfg.Defaults.Surface, cfg.Defaults.Model)
+	fmt.Fprintln(stdout, "显式入口和模型优先；模型目录描述支持关系，不触发跨入口降级。")
+	fmt.Fprintln(stdout, "用 providers scan 更新本机目录；--dry-run 仅预览。")
+	fmt.Fprintln(stdout, "用 models resolve [target] --model <id> --surface cli|app 检查解析，不发模型请求。")
+	fmt.Fprintln(stdout, "Codex App 必须指定 codex --surface app；resume 继承已记录渠道。")
+	fmt.Fprintln(stdout, "未列出的原生模型ID可显式透传，目录命中不保证账号权限或额度。")
+	fmt.Fprintln(stdout, "偏好文档只表达场景建议，不覆盖 config.json 或本次明确输入。")
+	keys := make([]string, 0, len(cfg.Models))
+	for key := range cfg.Models {
+		keys = append(keys, key)
 	}
-	for _, model := range models {
-		parts := make([]string, 0, len(model.Candidates))
-		for _, candidate := range model.Candidates {
-			parts = append(parts, candidate.Provider+"/"+candidate.Model)
+	sort.Strings(keys)
+	for _, key := range keys {
+		entry := cfg.Models[key]
+		paths := []string{}
+		for provider, surfaces := range entry.Targets {
+			for surface, target := range surfaces {
+				paths = append(paths, provider+"/"+surface+" -> "+target.Model)
+			}
 		}
-		fmt.Fprintf(stdout, "- %s -> %s\n", model.Key, strings.Join(parts, "; "))
+		sort.Strings(paths)
+		fmt.Fprintf(stdout, "- %s: %s\n", key, strings.Join(paths, "; "))
 	}
 	return nil
 }

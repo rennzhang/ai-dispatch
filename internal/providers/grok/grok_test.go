@@ -202,7 +202,7 @@ func TestBuildMissingBinaryIsConfigFailureShape(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected missing binary error")
 	}
-	if !strings.Contains(err.Error(), "AI_DISPATCH_GROK_BIN override binary not found") || strings.Contains(err.Error(), "missing-grok") {
+	if !strings.Contains(err.Error(), "binary not found") || strings.Contains(err.Error(), "missing-grok") {
 		t.Fatalf("unexpected error: %q", err.Error())
 	}
 }

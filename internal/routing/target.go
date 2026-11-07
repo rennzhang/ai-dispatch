@@ -2,327 +2,171 @@ package routing
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
 	"github.com/rennzhang/ai-dispatch/internal/config"
 )
 
+// DispatchTarget is one fully resolved execution, never an ordered fallback
+// pool. Executable and model capabilities come from the same config snapshot.
 type DispatchTarget struct {
-	Requested  string           `json:"requested"`
-	Provider   string           `json:"provider"`
-	Model      string           `json:"model,omitempty"`
-	Source     string           `json:"source"`
-	ModelKey   string           `json:"model_key,omitempty"`
-	ActualID   string           `json:"actual_id,omitempty"`
-	Efforts    []string         `json:"efforts,omitempty"`
-	Fast       *bool            `json:"fast,omitempty"`
-	Candidates []RouteCandidate `json:"candidates,omitempty"`
+	Requested   string   `json:"requested"`
+	Provider    string   `json:"provider"`
+	Surface     string   `json:"surface"`
+	Executable  string   `json:"executable,omitempty"`
+	Model       string   `json:"model,omitempty"`
+	Source      string   `json:"source"`
+	ModelKey    string   `json:"model_key,omitempty"`
+	ActualID    string   `json:"actual_id,omitempty"`
+	ModelListed bool     `json:"model_listed"`
+	Efforts     []string `json:"efforts,omitempty"`
+	Fast        *bool    `json:"fast,omitempty"`
 }
 
-type RouteCandidate struct {
-	Provider string   `json:"provider"`
-	Model    string   `json:"model,omitempty"`
-	Source   string   `json:"source,omitempty"`
-	ModelKey string   `json:"model_key,omitempty"`
-	ActualID string   `json:"actual_id,omitempty"`
-	Efforts  []string `json:"efforts,omitempty"`
-	Fast     *bool    `json:"fast,omitempty"`
+func Resolve(rawTarget, explicitModel string) (DispatchTarget, error) {
+	return ResolveSurface(rawTarget, explicitModel, "")
 }
 
-type ConfiguredModel struct {
-	Key        string
-	Candidates []RouteCandidate
-}
-
-func Resolve(rawTarget string, explicitModel string) (DispatchTarget, error) {
-	target := strings.TrimSpace(rawTarget)
-	model := strings.TrimSpace(explicitModel)
-	if target == "" {
-		return DispatchTarget{}, fmt.Errorf("target is required")
+func ResolveSurface(rawTarget, explicitModel, surface string) (DispatchTarget, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return DispatchTarget{}, err
 	}
-	if strings.Contains(target, ":") || strings.Contains(model, ":") {
+	return resolve(cfg, rawTarget, explicitModel, surface)
+}
+
+func resolve(cfg config.Config, rawTarget, explicitModel, surface string) (DispatchTarget, error) {
+	requested := strings.TrimSpace(rawTarget)
+	model := strings.TrimSpace(explicitModel)
+	implicitDefault := requested == "" && model == ""
+	surface = strings.ToLower(strings.TrimSpace(surface))
+	if strings.Contains(requested, ":") {
 		return DispatchTarget{}, fmt.Errorf("colon route syntax is not supported; use a provider target with --model")
 	}
-	normalized := strings.ToLower(target)
+	provider, explicitProvider := config.ProviderName(requested)
+	source := "provider"
+	if !explicitProvider {
+		provider = cfg.Defaults.Provider
+		source = "default"
+		if surface == "" {
+			surface = cfg.Defaults.Surface
+		}
+		if requested != "" {
+			if model != "" {
+				return DispatchTarget{}, fmt.Errorf("cannot combine explicit model with model target")
+			}
+			model = requested
+			source = "config"
+		} else if model == "" {
+			model = cfg.Defaults.Model
+		}
+	}
+	if surface == "" {
+		surface = "cli"
+	}
+	if surface != "cli" && surface != "app" {
+		return DispatchTarget{}, fmt.Errorf("surface must be cli or app")
+	}
+	if surface == "app" && provider != "codex" {
+		return DispatchTarget{}, fmt.Errorf("surface app is only supported by codex; specify codex --surface app")
+	}
+	target := DispatchTarget{Requested: requested, Provider: provider, Surface: surface, Source: source, Executable: cfg.Providers[provider].Executable}
 	if model == "" {
-		if configured, ok, err := lookupConfiguredModelTarget(target); err != nil {
-			return DispatchTarget{}, err
-		} else if ok {
-			return configured, nil
+		return target, nil
+	}
+	key, entry, known := lookupModel(cfg, model)
+	if known {
+		if resolved, ok := entry.Targets[provider][surface]; ok {
+			return modelTarget(target, key, resolved), nil
 		}
-		if exact, ok, err := lookupConfiguredExactID(target); err != nil {
-			return DispatchTarget{}, err
-		} else if ok {
-			return exact, nil
+		// An exact native ID remains valid input to an explicitly selected entry,
+		// even when the same literal is catalogued under a different provider.
+		if explicitProvider && !isAlias(entry, model) && isNativeID(cfg, model) {
+			return nativeTarget(target, model), nil
 		}
-		if provider, ok := providerName(normalized); ok {
-			return providerTarget(target, provider, "")
+		if implicitDefault {
+			return DispatchTarget{}, defaultModelMissing(model, provider, surface)
 		}
-		return DispatchTarget{}, fmt.Errorf("unsupported target: %s", rawTarget)
+		return DispatchTarget{}, fmt.Errorf("model %q has no %s/%s target; specify a supported entry or an explicit native model ID", model, provider, surface)
 	}
-	provider, ok := providerName(normalized)
-	if !ok {
-		return DispatchTarget{}, fmt.Errorf("cannot combine explicit model with model target")
-	}
-	return providerTarget(target, provider, model)
-}
-
-func providerName(normalized string) (string, bool) {
-	switch normalized {
-	case "codex", "opencode", "claude", "antigravity", "grok", "cursor", "omp":
-		return normalized, true
-	case "gemini":
-		return "antigravity", true
-	default:
-		return "", false
-	}
-}
-
-func providerTarget(target string, provider string, model string) (DispatchTarget, error) {
-	if strings.TrimSpace(model) == "" {
-		return DispatchTarget{
-			Requested: target,
-			Provider:  provider,
-			Source:    "provider",
-		}, nil
-	}
-	if configured, ok, err := lookupConfiguredModelTarget(model); err != nil {
+	if exactKey, exact, ok, err := lookupExact(cfg, provider, surface, model); err != nil {
 		return DispatchTarget{}, err
 	} else if ok {
-		matches := []DispatchTarget{}
-		for _, candidate := range CandidateTargets(configured) {
-			if candidate.Provider == provider {
-				candidate.Requested = target
-				candidate.Source = "provider"
-				matches = append(matches, candidate)
+		return modelTarget(target, exactKey, exact), nil
+	}
+	if implicitDefault {
+		return DispatchTarget{}, defaultModelMissing(model, provider, surface)
+	}
+	if requested != "" && !explicitProvider {
+		return DispatchTarget{}, fmt.Errorf("unsupported target: %s; specify a provider with --model for an unlisted native ID", requested)
+	}
+	return nativeTarget(target, model), nil
+}
+
+func defaultModelMissing(model, provider, surface string) error {
+	return fmt.Errorf("default model %q has no discovered or configured %s/%s target; run init or providers scan before default dispatch", model, provider, surface)
+}
+
+func modelTarget(target DispatchTarget, key string, model config.ModelTarget) DispatchTarget {
+	target.Model, target.ActualID, target.ModelKey = model.Model, model.Model, key
+	target.ModelListed = true
+	target.Efforts = append([]string(nil), model.Efforts...)
+	target.Fast = copyBoolPtr(model.Fast)
+	return target
+}
+
+func nativeTarget(target DispatchTarget, model string) DispatchTarget {
+	target.Model, target.ActualID = model, model
+	return target
+}
+
+func lookupModel(cfg config.Config, value string) (string, config.ModelEntry, bool) {
+	for key, entry := range cfg.Models {
+		if strings.EqualFold(key, value) || isAlias(entry, value) {
+			return key, entry, true
+		}
+	}
+	return "", config.ModelEntry{}, false
+}
+
+func isAlias(entry config.ModelEntry, value string) bool {
+	for _, alias := range entry.Aliases {
+		if strings.EqualFold(alias, value) {
+			return true
+		}
+	}
+	return false
+}
+
+func isNativeID(cfg config.Config, value string) bool {
+	for _, entry := range cfg.Models {
+		for _, surfaces := range entry.Targets {
+			for _, target := range surfaces {
+				if target.Model == value {
+					return true
+				}
 			}
 		}
-		if len(matches) > 0 {
-			return withCandidates(target, matches), nil
-		}
-		return DispatchTarget{}, fmt.Errorf("model alias %q has no %s candidate", model, provider)
 	}
-	hits, err := lookupConfiguredExactHits(model)
-	if err != nil {
-		return DispatchTarget{}, err
-	}
-	matches := []DispatchTarget{}
-	for _, hit := range hits {
-		if hit.Provider == provider {
-			hit.Requested = target
-			hit.Source = "provider"
-			matches = append(matches, hit)
-		}
-	}
-	if len(matches) > 0 {
-		first := matches[0]
-		first.Candidates = nil
-		return first, nil
-	}
-	if len(hits) > 0 {
-		return DispatchTarget{}, fmt.Errorf("model id %q belongs to provider %q, not %q", model, hits[0].Provider, provider)
-	}
-	return DispatchTarget{
-		Requested: target,
-		Provider:  provider,
-		Model:     model,
-		Source:    "provider",
-		ActualID:  model,
-	}, nil
+	return false
 }
 
-func lookupConfiguredModelTarget(value string) (DispatchTarget, bool, error) {
-	normalized := strings.ToLower(strings.TrimSpace(value))
-	if normalized == "" {
-		return DispatchTarget{}, false, nil
-	}
-	cfg, err := config.Load()
-	if err != nil {
-		return DispatchTarget{}, false, err
-	}
-	for key, routes := range cfg.Models {
-		if strings.ToLower(strings.TrimSpace(key)) != normalized {
-			continue
-		}
-		candidates, err := configuredCandidates(strings.TrimSpace(value), key, routes)
-		if err != nil {
-			return DispatchTarget{}, false, err
-		}
-		return withCandidates(strings.TrimSpace(value), candidates), true, nil
-	}
-	return DispatchTarget{}, false, nil
-}
-
-func lookupConfiguredExactHits(value string) ([]DispatchTarget, error) {
-	normalized := strings.ToLower(strings.TrimSpace(value))
-	if normalized == "" {
-		return nil, nil
-	}
-	cfg, err := config.Load()
-	if err != nil {
-		return nil, err
-	}
-	keys := make([]string, 0, len(cfg.Models))
-	for key := range cfg.Models {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	var hits []DispatchTarget
+func lookupExact(cfg config.Config, provider, surface, value string) (string, config.ModelTarget, bool, error) {
+	keys := sortedModelKeys(cfg)
+	var selected config.ModelTarget
+	selectedKey := ""
 	for _, key := range keys {
-		for _, route := range cfg.Models[key] {
-			provider := normalizeProvider(route.Provider)
-			model := strings.TrimSpace(route.Model)
-			if strings.ToLower(model) != normalized {
-				continue
+		target, ok := cfg.Models[key].Targets[provider][surface]
+		if ok && target.Model == value {
+			if selectedKey != "" && (!reflect.DeepEqual(selected.Efforts, target.Efforts) || !reflect.DeepEqual(selected.Fast, target.Fast)) {
+				return "", config.ModelTarget{}, false, fmt.Errorf("native model ID %q has ambiguous capabilities for %s/%s in models.%s and models.%s; use a logical model name or correct the config", value, provider, surface, selectedKey, key)
 			}
-			if provider == "" || !implementedProvider(provider) {
-				continue
-			}
-			hits = append(hits, DispatchTarget{
-				Requested: strings.TrimSpace(value),
-				Provider:  provider,
-				Model:     model,
-				Source:    "config",
-				ModelKey:  strings.TrimSpace(key),
-				ActualID:  model,
-				Efforts:   append([]string(nil), route.Efforts...),
-				Fast:      copyBoolPtr(route.Fast),
-			})
+			selectedKey, selected = key, target
 		}
 	}
-	return hits, nil
-}
-
-func lookupConfiguredExactID(value string) (DispatchTarget, bool, error) {
-	hits, err := lookupConfiguredExactHits(value)
-	if err != nil {
-		return DispatchTarget{}, false, err
-	}
-	if len(hits) == 0 {
-		return DispatchTarget{}, false, nil
-	}
-	first := hits[0]
-	for _, hit := range hits[1:] {
-		if hit.Provider != first.Provider || hit.Model != first.Model {
-			return DispatchTarget{}, false, fmt.Errorf("exact model id %q is ambiguous in config.models", value)
-		}
-	}
-	first.Requested = strings.TrimSpace(value)
-	first.Candidates = nil
-	return first, true, nil
-}
-
-func configuredCandidates(requested string, key string, routes []config.ModelRoute) ([]DispatchTarget, error) {
-	candidates := make([]DispatchTarget, 0, len(routes))
-	for _, route := range routes {
-		provider := normalizeProvider(route.Provider)
-		model := strings.TrimSpace(route.Model)
-		if provider == "" {
-			return nil, fmt.Errorf("config.models.%s has empty provider", key)
-		}
-		if !implementedProvider(provider) {
-			return nil, fmt.Errorf("config.models.%s uses unsupported provider %q", key, route.Provider)
-		}
-		candidates = append(candidates, DispatchTarget{
-			Requested: requested,
-			Provider:  provider,
-			Model:     model,
-			Source:    "config",
-			ModelKey:  strings.TrimSpace(key),
-			ActualID:  model,
-			Efforts:   append([]string(nil), route.Efforts...),
-			Fast:      copyBoolPtr(route.Fast),
-		})
-	}
-	if len(candidates) == 0 {
-		return nil, fmt.Errorf("config.models.%s has no candidates", key)
-	}
-	return candidates, nil
-}
-
-func withCandidates(requested string, candidates []DispatchTarget) DispatchTarget {
-	first := candidates[0]
-	first.Requested = requested
-	if len(candidates) > 1 {
-		first.Candidates = make([]RouteCandidate, 0, len(candidates))
-		for _, candidate := range candidates {
-			first.Candidates = append(first.Candidates, RouteCandidate{
-				Provider: candidate.Provider,
-				Model:    candidate.Model,
-				Source:   candidate.Source,
-				ModelKey: candidate.ModelKey,
-				ActualID: candidate.ActualID,
-				Efforts:  append([]string(nil), candidate.Efforts...),
-				Fast:     copyBoolPtr(candidate.Fast),
-			})
-		}
-	} else {
-		first.Candidates = nil
-	}
-	return first
-}
-
-func CandidateTargets(target DispatchTarget) []DispatchTarget {
-	if len(target.Candidates) == 0 {
-		return []DispatchTarget{target}
-	}
-	out := make([]DispatchTarget, 0, len(target.Candidates))
-	for _, candidate := range target.Candidates {
-		out = append(out, DispatchTarget{
-			Requested: target.Requested,
-			Provider:  candidate.Provider,
-			Model:     candidate.Model,
-			Source:    candidate.Source,
-			ModelKey:  candidate.ModelKey,
-			ActualID:  candidate.ActualID,
-			Efforts:   append([]string(nil), candidate.Efforts...),
-			Fast:      copyBoolPtr(candidate.Fast),
-		})
-	}
-	return out
-}
-
-func normalizeProvider(provider string) string {
-	provider = strings.ToLower(strings.TrimSpace(provider))
-	if provider == "gemini" {
-		return "antigravity"
-	}
-	return provider
-}
-
-func ConfiguredModels() ([]ConfiguredModel, error) {
-	keys := ConfigModelTargets()
-	models := make([]ConfiguredModel, 0, len(keys))
-	for _, key := range keys {
-		target, ok, err := lookupConfiguredModelTarget(key)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			continue
-		}
-		models = append(models, ConfiguredModel{
-			Key:        key,
-			Candidates: routeCandidates(target),
-		})
-	}
-	return models, nil
-}
-
-func routeCandidates(target DispatchTarget) []RouteCandidate {
-	if len(target.Candidates) > 0 {
-		return target.Candidates
-	}
-	return []RouteCandidate{{
-		Provider: target.Provider,
-		Model:    target.Model,
-		Source:   target.Source,
-		ModelKey: target.ModelKey,
-		ActualID: target.ActualID,
-		Efforts:  append([]string(nil), target.Efforts...),
-		Fast:     copyBoolPtr(target.Fast),
-	}}
+	return selectedKey, selected, selectedKey != "", nil
 }
 
 func ConfigModelTargets() []string {
@@ -330,37 +174,22 @@ func ConfigModelTargets() []string {
 	if err != nil {
 		return nil
 	}
-	targets := make([]string, 0, len(cfg.Models))
-	for target, routes := range cfg.Models {
-		if strings.TrimSpace(target) == "" || len(routes) == 0 {
-			continue
-		}
-		targets = append(targets, strings.TrimSpace(target))
+	targets := []string{}
+	for key, entry := range cfg.Models {
+		targets = append(targets, key)
+		targets = append(targets, entry.Aliases...)
 	}
 	sort.Strings(targets)
 	return targets
 }
 
-func SupportedTargets() []string {
-	seen := map[string]bool{}
-	targets := []string{}
-	for _, target := range append([]string{"codex", "opencode", "claude", "antigravity", "gemini", "grok", "cursor", "omp"}, ConfigModelTargets()...) {
-		if target == "" || seen[target] {
-			continue
-		}
-		seen[target] = true
-		targets = append(targets, target)
+func sortedModelKeys(cfg config.Config) []string {
+	keys := make([]string, 0, len(cfg.Models))
+	for key := range cfg.Models {
+		keys = append(keys, key)
 	}
-	return targets
-}
-
-func implementedProvider(provider string) bool {
-	switch provider {
-	case "codex", "opencode", "claude", "antigravity", "grok", "cursor", "omp":
-		return true
-	default:
-		return false
-	}
+	sort.Strings(keys)
+	return keys
 }
 
 func copyBoolPtr(value *bool) *bool {

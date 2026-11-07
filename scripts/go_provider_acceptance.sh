@@ -17,9 +17,7 @@ TOOL_PROVIDER_OPTS_CSV="${AI_DISPATCH_ACCEPTANCE_TOOL_PROVIDER_OPTS:-$PROVIDER_O
 VARIANT_TARGET="${AI_DISPATCH_ACCEPTANCE_VARIANT_TARGET:-}"
 VARIANT_PROVIDER="${AI_DISPATCH_ACCEPTANCE_VARIANT_PROVIDER:-$EXPECTED_PROVIDER}"
 VARIANT_MODEL="${AI_DISPATCH_ACCEPTANCE_VARIANT_MODEL:-}"
-FALLBACK_ENV="${AI_DISPATCH_ACCEPTANCE_FALLBACK_ENV:-}"
-FALLBACK_PROVIDER="${AI_DISPATCH_ACCEPTANCE_FALLBACK_PROVIDER:-}"
-FALLBACK_MODEL="${AI_DISPATCH_ACCEPTANCE_FALLBACK_MODEL:-}"
+FAIL_CLOSED_ENV="${AI_DISPATCH_ACCEPTANCE_FAIL_CLOSED_ENV:-}"
 INVALID_PROVIDER_OPT="${AI_DISPATCH_ACCEPTANCE_INVALID_PROVIDER_OPT:-}"
 INVALID_MODEL="${AI_DISPATCH_ACCEPTANCE_INVALID_MODEL:-}"
 UNSUPPORTED_TARGETS="${AI_DISPATCH_ACCEPTANCE_UNSUPPORTED_TARGETS:-}"
@@ -27,6 +25,13 @@ SKIP_RESUME="${AI_DISPATCH_ACCEPTANCE_SKIP_RESUME:-off}"
 SKIP_PROMPT_FILE="${AI_DISPATCH_ACCEPTANCE_SKIP_PROMPT_FILE:-off}"
 SKIP_STDIN="${AI_DISPATCH_ACCEPTANCE_SKIP_STDIN:-off}"
 SKIP_CWD="${AI_DISPATCH_ACCEPTANCE_SKIP_CWD:-off}"
+
+for retired in AI_DISPATCH_ACCEPTANCE_FALLBACK_ENV AI_DISPATCH_ACCEPTANCE_FALLBACK_PROVIDER AI_DISPATCH_ACCEPTANCE_FALLBACK_MODEL; do
+  if printenv "$retired" >/dev/null; then
+    echo "[provider-acceptance] $retired is retired; use AI_DISPATCH_ACCEPTANCE_FAIL_CLOSED_ENV" >&2
+    exit 2
+  fi
+done
 
 mkdir -p "$RUNS_DIR"
 cd "$ROOT"
@@ -46,6 +51,10 @@ printf '[provider-acceptance] target=%s provider=%s model=%s report_dir=%s\n' \
 
 provider_opts=()
 tool_provider_opts=()
+model_flags=()
+if [[ -n "$EXPECTED_MODEL" ]]; then
+  model_flags=(--model "$EXPECTED_MODEL")
+fi
 
 append_provider_opts_to_provider() {
   local csv="$1"
@@ -173,16 +182,16 @@ const row = {
   name,
   code: Number(code),
   duration_s: Number(duration),
-  ok: parsed && typeof parsed.ok === "boolean" ? parsed.ok : Number(code) === 0,
+  ok: parsed && typeof parsed.ok === "boolean" ? parsed.ok : null,
   status: parsed && parsed.status || null,
   provider,
   model,
   requested_target: parsed && (parsed.requested_target || parsed.requested) || null,
   session_id: parsed && parsed.session_id || null,
-  degraded: parsed && parsed.degraded || false,
+  degraded: parsed && typeof parsed.degraded === "boolean" ? parsed.degraded : null,
   degrade_reason: parsed && parsed.degrade_reason || "",
   failure_class: parsed && parsed.failure_class || null,
-  route_steps: parsed && parsed.route_steps || [],
+  route_steps: parsed && parsed.route_steps || null,
   marker_ok: expected && !expectsFailure ? text.includes(expected) || stdout.includes(expected) : undefined,
   stdout_path: outPath,
   stderr_path: errPath,
@@ -194,8 +203,8 @@ NODE
 }
 
 run_case "doctor_json" "$DISPATCH" doctor --format json
-run_case "providers_scan_json" "$DISPATCH" providers scan --format json
-run_case "resolve_${TARGET}" "$DISPATCH" models resolve "$TARGET" --format json
+run_case "providers_scan_json" "$DISPATCH" providers scan --dry-run --format json
+run_case "resolve_${TARGET}" "$DISPATCH" models resolve "$TARGET" ${model_flags[@]+"${model_flags[@]}"} --format json
 
 if [[ -n "$UNSUPPORTED_TARGETS" ]]; then
   old_ifs="$IFS"
@@ -214,7 +223,7 @@ fi
 run_case "native_send_EXPECT_NATIVE_OK" \
   "$DISPATCH" send "$TARGET" "Reply exactly: NATIVE_OK" \
     --json-result --stream-progress --timeout "$TIMEOUT" --activity-timeout "$ACTIVITY_TIMEOUT" \
-    --task-name "${TASK_PREFIX}-native" "${provider_opts[@]}"
+    --task-name "${TASK_PREFIX}-native" ${model_flags[@]+"${model_flags[@]}"} ${provider_opts[@]+"${provider_opts[@]}"}
 
 native_stdout="$REPORT_DIR/$(safe_name native_send_EXPECT_NATIVE_OK).stdout"
 native_session="$(last_json_field "$native_stdout" session_id)"
@@ -223,7 +232,7 @@ if [[ "$SKIP_RESUME" != "on" && -n "$native_session" ]]; then
     "$DISPATCH" resume --session-id "$native_session" --session-provider "$RESUME_TARGET" \
       "Reply exactly: RESUME_OK" \
       --json-result --stream-progress --timeout "$TIMEOUT" --activity-timeout "$ACTIVITY_TIMEOUT" \
-      --task-name "${TASK_PREFIX}-resume" "${provider_opts[@]}"
+      --task-name "${TASK_PREFIX}-resume" ${provider_opts[@]+"${provider_opts[@]}"}
 elif [[ "$SKIP_RESUME" != "on" ]]; then
   printf '[provider-acceptance] SKIP resume_native no native session_id\n'
 fi
@@ -232,14 +241,14 @@ if [[ -n "$EXPECTED_MODEL" ]]; then
   run_case "explicit_model_EXPECT_EXPLICIT_OK" \
     "$DISPATCH" send "$TARGET" "Reply exactly: EXPLICIT_OK" \
       --model "$EXPECTED_MODEL" --json-result --timeout "$TIMEOUT" --activity-timeout "$ACTIVITY_TIMEOUT" \
-      --task-name "${TASK_PREFIX}-explicit" "${provider_opts[@]}"
+      --task-name "${TASK_PREFIX}-explicit" ${provider_opts[@]+"${provider_opts[@]}"}
 fi
 
 if [[ -n "$VARIANT_TARGET" ]]; then
   run_case "variant_${VARIANT_TARGET}_EXPECT_VARIANT_OK" \
     "$DISPATCH" send "$VARIANT_TARGET" "Reply exactly: VARIANT_OK" \
       --json-result --timeout "$TIMEOUT" --activity-timeout "$ACTIVITY_TIMEOUT" \
-      --task-name "${TASK_PREFIX}-variant" "${provider_opts[@]}"
+      --task-name "${TASK_PREFIX}-variant" ${provider_opts[@]+"${provider_opts[@]}"}
 fi
 
 if [[ "$SKIP_PROMPT_FILE" != "on" ]]; then
@@ -249,7 +258,7 @@ if [[ "$SKIP_PROMPT_FILE" != "on" ]]; then
   run_case "prompt_file_output_file_EXPECT_PROMPT_FILE_OK" \
     "$DISPATCH" send "$TARGET" --prompt-file "$prompt_file" \
       --json-result --output-file "$output_file" --timeout "$TIMEOUT" --activity-timeout "$ACTIVITY_TIMEOUT" \
-      --task-name "${TASK_PREFIX}-prompt-file" "${provider_opts[@]}"
+      --task-name "${TASK_PREFIX}-prompt-file" ${model_flags[@]+"${model_flags[@]}"} ${provider_opts[@]+"${provider_opts[@]}"}
   run_case "output_file_contains_EXPECT_PROMPT_FILE_OK" \
     bash -lc 'grep -q "PROMPT_FILE_OK" "$1" && printf "{\"ok\":true,\"text\":\"PROMPT_FILE_OK\"}\n"' bash "$output_file"
 fi
@@ -257,7 +266,7 @@ fi
 if [[ "$SKIP_STDIN" != "on" ]]; then
   run_case_stdin "stdin_prompt_EXPECT_STDIN_OK" "Reply exactly: STDIN_OK" \
     "$DISPATCH" send "$TARGET" --json-result --timeout "$TIMEOUT" --activity-timeout "$ACTIVITY_TIMEOUT" \
-      --task-name "${TASK_PREFIX}-stdin" "${provider_opts[@]}"
+      --task-name "${TASK_PREFIX}-stdin" ${model_flags[@]+"${model_flags[@]}"} ${provider_opts[@]+"${provider_opts[@]}"}
 fi
 
 if [[ "$SKIP_CWD" != "on" ]]; then
@@ -267,15 +276,15 @@ if [[ "$SKIP_CWD" != "on" ]]; then
   run_case "cwd_file_read_EXPECT_CWD_OK" \
     "$DISPATCH" send "$TARGET" "Read needle.txt in cwd, confirm it contains needle-from-provider-acceptance, and reply exactly: CWD_OK" \
       --cwd "$workdir" --json-result --timeout "$TIMEOUT" --activity-timeout "$ACTIVITY_TIMEOUT" \
-      --task-name "${TASK_PREFIX}-cwd" "${tool_provider_opts[@]}"
+      --task-name "${TASK_PREFIX}-cwd" ${model_flags[@]+"${model_flags[@]}"} ${tool_provider_opts[@]+"${tool_provider_opts[@]}"}
 fi
 
-if [[ -n "$FALLBACK_ENV" ]]; then
-  run_case "fallback_EXPECT_FALLBACK_OK" \
-    env "$FALLBACK_ENV=$REPORT_DIR/missing-${EXPECTED_PROVIDER}" "$DISPATCH" send "$TARGET" \
-      "Reply exactly: FALLBACK_OK" \
+if [[ -n "$FAIL_CLOSED_ENV" ]]; then
+  run_case "missing_provider_EXPECT_ERROR" \
+    env "$FAIL_CLOSED_ENV=$REPORT_DIR/missing-${EXPECTED_PROVIDER}" "$DISPATCH" send "$TARGET" \
+      "This must fail without switching providers" \
       --json-result --timeout "$TIMEOUT" --activity-timeout "$ACTIVITY_TIMEOUT" \
-      --task-name "${TASK_PREFIX}-fallback"
+      --task-name "${TASK_PREFIX}-fail-closed" ${model_flags[@]+"${model_flags[@]}"} ${provider_opts[@]+"${provider_opts[@]}"}
 fi
 
 if [[ -n "$INVALID_PROVIDER_OPT" ]]; then
@@ -290,7 +299,7 @@ fi
 
 run_case "runs_list_target" "$DISPATCH" runs list --task-name "${TASK_PREFIX}-*" --limit 20
 
-node - "$REPORT_DIR/summary.jsonl" "$EXPECTED_PROVIDER" "$EXPECTED_MODEL" "$VARIANT_TARGET" "$VARIANT_PROVIDER" "$VARIANT_MODEL" "$FALLBACK_PROVIDER" "$FALLBACK_MODEL" "$INVALID_PROVIDER_OPT" "$INVALID_MODEL" <<'NODE'
+node - "$REPORT_DIR/summary.jsonl" "$EXPECTED_PROVIDER" "$EXPECTED_MODEL" "$VARIANT_TARGET" "$VARIANT_PROVIDER" "$VARIANT_MODEL" "$FAIL_CLOSED_ENV" "$INVALID_PROVIDER_OPT" "$INVALID_MODEL" <<'NODE'
 const fs = require("fs");
 const [
   summaryPath,
@@ -299,8 +308,7 @@ const [
   variantTarget,
   variantProvider,
   variantModel,
-  fallbackProvider,
-  fallbackModel,
+  failClosedEnv,
   invalidProviderOpt,
   invalidModel,
 ] = process.argv.slice(2);
@@ -359,12 +367,13 @@ if (byName.stdin_prompt_EXPECT_STDIN_OK) {
 if (byName.cwd_file_read_EXPECT_CWD_OK) {
   requireRow("cwd_file_read_EXPECT_CWD_OK", expectedNative, "expected cwd route");
 }
-if (fallbackProvider) {
-  requireRow("fallback_EXPECT_FALLBACK_OK", (row) => {
-    if (row.provider !== fallbackProvider) return false;
-    if (fallbackModel && row.model !== fallbackModel) return false;
-    return row.degraded === true && row.route_steps.length >= 2;
-  }, "expected configured fallback candidate");
+if (failClosedEnv) {
+  requireRow("missing_provider_EXPECT_ERROR", (row) => {
+    return row.ok === false && expectedNative(row) && row.degraded === false
+      && Array.isArray(row.route_steps) && row.route_steps.length === 1
+      && row.route_steps[0].provider === expectedProvider
+      && (row.route_steps[0].model || null) === row.model;
+  }, "expected one failed attempt on the selected provider without switching");
 }
 if (invalidProviderOpt) {
   requireRow("invalid_provider_opt_EXPECT_ERROR", (row) => row.failure_class === "input", "expected input failure");

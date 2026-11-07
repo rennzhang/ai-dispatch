@@ -7,6 +7,7 @@ cd "$ROOT"
 AI_DISPATCH_GO_PROVIDER_EXECUTION=off go test -race ./...
 go vet ./...
 scripts/go_active_caller_check.sh
+scripts/provider_acceptance_test.sh
 
 shell_files=(
   bin/ai-dispatch
@@ -15,6 +16,7 @@ shell_files=(
   scripts/render-homebrew-formula.sh
   scripts/check-homebrew-formula.sh
   scripts/go_provider_acceptance.sh
+  scripts/provider_acceptance_test.sh
   scripts/distribution_acceptance.sh
   scripts/go_active_caller_check.sh
   scripts/quality_gate.sh

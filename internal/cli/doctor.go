@@ -60,6 +60,7 @@ func doctorConfigSummary(cfg config.Config) map[string]any {
 		"claude_transport":      cfg.ClaudeTransport,
 		"model_alias_count":     len(cfg.Models),
 		"provider_status_count": len(cfg.Providers),
+		"defaults":              cfg.Defaults,
 	}
 	if len(cfg.Providers) > 0 {
 		out["providers"] = doctorProviderSummary(cfg.Providers)
@@ -71,12 +72,11 @@ func doctorProviderSummary(providers config.ProvidersConfig) map[string]map[stri
 	out := map[string]map[string]any{}
 	for name, ps := range providers {
 		item := map[string]any{
-			"available": ps.Available,
+			"available": ps.Executable != "",
+			"surfaces":  ps.Surfaces,
 			"has_error": ps.Error != "",
 		}
-		if ps.CatalogModelCount > 0 {
-			item["catalog_model_count"] = ps.CatalogModelCount
-		}
+
 		out[name] = item
 	}
 	return out

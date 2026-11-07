@@ -18,6 +18,17 @@ import (
 	"github.com/rennzhang/ai-dispatch/internal/runtime"
 )
 
+func TestExplicitDriverBinaryDoesNotUseEnvironmentOverride(t *testing.T) {
+	available := filepath.Join(t.TempDir(), "agy")
+	if err := os.WriteFile(available, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AI_DISPATCH_AGY_BIN", available)
+	if _, err := resolveAgyBinary(filepath.Join(t.TempDir(), "missing-explicit")); err == nil {
+		t.Fatal("an explicit request must not switch to the environment's binary")
+	}
+}
+
 func TestBuildUsesAgyDriver(t *testing.T) {
 	t.Setenv("AI_DISPATCH_AGY_GO_DRIVER", "/tmp/fake-agy-driver")
 	spec, err := (Provider{}).Build(providers.BuildRequest{
@@ -296,7 +307,7 @@ func TestResolveAgyBinaryExplicitFailureDoesNotFallbackOrLeakPath(t *testing.T) 
 	if err == nil {
 		t.Fatal("expected explicit binary failure")
 	}
-	if strings.Contains(err.Error(), missing) || !strings.Contains(err.Error(), "agy binary override") {
+	if strings.Contains(err.Error(), missing) || !strings.Contains(err.Error(), "binary not found") {
 		t.Fatalf("err=%v", err)
 	}
 }

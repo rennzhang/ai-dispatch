@@ -16,6 +16,7 @@ import (
 )
 
 func TestBuildClaudeAPIArgs(t *testing.T) {
+	t.Setenv("AI_DISPATCH_CLAUDE_BIN", writeTestClaudeBinary(t))
 	target := routing.DispatchTarget{Requested: "claude-sonnet", Provider: "claude", Model: "sonnet"}
 	spec, err := Provider{}.Build(providers.BuildRequest{
 		Prompt:          "hello",
@@ -26,7 +27,7 @@ func TestBuildClaudeAPIArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantPrefix := []string{"claude", "-p", "--setting-sources", "user,project", "--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose", "--resume", "s1", "--model", "sonnet", "hello"}
+	wantPrefix := []string{os.Getenv("AI_DISPATCH_CLAUDE_BIN"), "-p", "--setting-sources", "user,project", "--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose", "--resume", "s1", "--model", "sonnet", "hello"}
 	if len(spec.Args) != len(wantPrefix) {
 		t.Fatalf("args=%#v", spec.Args)
 	}
@@ -44,6 +45,7 @@ func TestBuildClaudeAPIArgs(t *testing.T) {
 }
 
 func TestBuildClaudePrintAndPTYNeverPassEffort(t *testing.T) {
+	t.Setenv("AI_DISPATCH_CLAUDE_BIN", writeTestClaudeBinary(t))
 	target := routing.DispatchTarget{Requested: "claude", Provider: "claude", Model: "sonnet"}
 	printSpec, err := Provider{}.Build(providers.BuildRequest{
 		Prompt:          "hello",
@@ -98,6 +100,7 @@ func TestResolveClaudeEffortAlwaysFallsBackUntilCLIVerified(t *testing.T) {
 }
 
 func TestBuildClaudeAPIPromptFileUsesStdin(t *testing.T) {
+	t.Setenv("AI_DISPATCH_CLAUDE_BIN", writeTestClaudeBinary(t))
 	target := routing.DispatchTarget{Requested: "claude", Provider: "claude", Model: "sonnet"}
 	promptFile := filepath.Join(t.TempDir(), "prompt.md")
 	if err := os.WriteFile(promptFile, []byte("prompt from file"), 0o600); err != nil {
@@ -120,6 +123,7 @@ func TestBuildClaudeAPIPromptFileUsesStdin(t *testing.T) {
 }
 
 func TestBuildClaudeAPIArgsUsesOpusAlias(t *testing.T) {
+	t.Setenv("AI_DISPATCH_CLAUDE_BIN", writeTestClaudeBinary(t))
 	target := routing.DispatchTarget{Requested: "opus4.7", Provider: "claude", Model: "opus"}
 	spec, err := Provider{}.Build(providers.BuildRequest{
 		Prompt:          "hello",
@@ -139,6 +143,7 @@ func TestBuildClaudeAPIArgsUsesOpusAlias(t *testing.T) {
 }
 
 func TestBuildClaudePTYArgs(t *testing.T) {
+	t.Setenv("AI_DISPATCH_CLAUDE_BIN", writeTestClaudeBinary(t))
 	t.Setenv("AI_DISPATCH_CLAUDE_PTY_GO_DRIVER", "go-pty-driver-test")
 	target := routing.DispatchTarget{Requested: "claude-sonnet", Provider: "claude", Model: "sonnet"}
 	spec, err := Provider{}.Build(providers.BuildRequest{
@@ -160,7 +165,7 @@ func TestBuildClaudePTYArgs(t *testing.T) {
 		"--timeout\x0040",
 		"--session-id\x00sess-1",
 		"--input\x00hello",
-		"--\x00env\x00CLAUDE_SESSION_ID=sess-1\x00AI_DISPATCH_CLAUDE_SESSION_ID=sess-1\x00claude",
+		"--\x00env\x00CLAUDE_SESSION_ID=sess-1\x00AI_DISPATCH_CLAUDE_SESSION_ID=sess-1\x00" + os.Getenv("AI_DISPATCH_CLAUDE_BIN"),
 		"--resume\x00sess-1",
 		"--model\x00sonnet",
 	} {
@@ -175,6 +180,7 @@ func TestBuildClaudePTYArgs(t *testing.T) {
 }
 
 func TestBuildClaudePTYPromptFileAndUnlimitedTimeout(t *testing.T) {
+	t.Setenv("AI_DISPATCH_CLAUDE_BIN", writeTestClaudeBinary(t))
 	t.Setenv("AI_DISPATCH_CLAUDE_PTY_GO_DRIVER", "go-pty-driver-test")
 	promptFile := filepath.Join(t.TempDir(), "prompt.md")
 	if err := os.WriteFile(promptFile, []byte("prompt from file"), 0o600); err != nil {
@@ -200,7 +206,7 @@ func TestBuildClaudePTYPromptFileAndUnlimitedTimeout(t *testing.T) {
 		t.Fatalf("generated session id must match in driver and Claude command: %#v", spec.Args)
 	}
 	sessionID := sessionIDs[0]
-	if !strings.Contains(strings.Join(spec.Args, "\x00"), "--\x00env\x00CLAUDE_SESSION_ID="+sessionID+"\x00AI_DISPATCH_CLAUDE_SESSION_ID="+sessionID+"\x00claude") ||
+	if !strings.Contains(strings.Join(spec.Args, "\x00"), "--\x00env\x00CLAUDE_SESSION_ID="+sessionID+"\x00AI_DISPATCH_CLAUDE_SESSION_ID="+sessionID+"\x00"+os.Getenv("AI_DISPATCH_CLAUDE_BIN")) ||
 		!strings.Contains(strings.Join(spec.Args, "\x00"), "--session-id\x00"+sessionID) {
 		t.Fatalf("generated session id not pinned in Claude command: %#v", spec.Args)
 	}
@@ -565,4 +571,13 @@ func argValues(args []string, key string) []string {
 		}
 	}
 	return values
+}
+
+func writeTestClaudeBinary(t *testing.T) string {
+	t.Helper()
+	binary := filepath.Join(t.TempDir(), "claude")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return binary
 }

@@ -113,7 +113,6 @@ func TestBuildOMPSessionNoneSkipsPersistence(t *testing.T) {
 	}
 }
 
-
 func TestBuildOMPResumeAndCWD(t *testing.T) {
 	fakeOMPBin(t)
 	target := routing.DispatchTarget{Requested: "omp", Provider: "omp", Model: "opencode-go/deepseek-v4.1-flash"}
@@ -203,7 +202,7 @@ func TestSuggestOMPEffortLevels(t *testing.T) {
 func TestParseOMPStream(t *testing.T) {
 	stdout := strings.Join([]string{
 		`{"type":"session","version":3,"id":"sess-123","timestamp":"2026-10-11T09:36:02.064Z","cwd":"/tmp"}`,
-		`{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"plan"},{"type":"text","text":"pong"}],"provider":"opencode-go","model":"deepseek-v4.1-flash","usage":{"input":10,"output":2,"cacheRead":1,"cacheWrite":0}}}`,
+		`{"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"thinking","thinking":"plan"},{"type":"text","text":"pong"}],"provider":"opencode-go","model":"deepseek-v4.1-flash","usage":{"input":10,"output":2,"cacheRead":1,"cacheWrite":0}}}`,
 		`{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"pong"}]}}`,
 	}, "\n")
 	result := Provider{}.Parse(runtime.RunResult{Stdout: []byte(stdout), ExitCode: 0, DurationMS: 12}, providers.BuildRequest{

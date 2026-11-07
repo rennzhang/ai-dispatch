@@ -24,8 +24,8 @@ type DispatchRequest struct {
 	Effort                 Effort                       `json:"effort,omitempty"`
 	Fast                   bool                         `json:"fast"`
 	ProviderOpts           map[string]map[string]string `json:"provider_opts,omitempty"`
-	// Surface selects the Codex delivery channel. Empty and "cli" use
-	// `codex exec`. "app" delivers into the Codex Desktop client. Other
-	// providers reject "app".
+	// Surface selects the delivery channel. Omitted values resolve from the
+	// new-request defaults or the existing session. "cli" uses the native CLI;
+	// "app" delivers into Codex Desktop and is rejected for other providers.
 	Surface string `json:"surface,omitempty"`
 }

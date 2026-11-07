@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/rennzhang/ai-dispatch/internal/config"
 	"github.com/rennzhang/ai-dispatch/internal/routing"
 )
 
@@ -26,14 +27,15 @@ func models(argv []string, stdout io.Writer, stderr io.Writer) int {
 	if err := validateFormat(*format); err != nil {
 		return emitCLIError(stdout, stderr, *format == "json", err.Error(), 2)
 	}
-	payload := map[string]any{
-		"ok":      true,
-		"targets": routing.SupportedTargets(),
+	cfg, err := config.Load()
+	if err != nil {
+		return emitCLIError(stdout, stderr, *format == "json", err.Error(), 1)
 	}
+	payload := map[string]any{"ok": true, "defaults": cfg.Defaults, "models": cfg.Models}
 	if *format == "json" {
 		return writeJSON(stdout, payload, 0)
 	}
-	fmt.Fprintln(stdout, strings.Join(payload["targets"].([]string), "\n"))
+	fmt.Fprintln(stdout, strings.Join(routing.ConfigModelTargets(), "\n"))
 	return 0
 }
 
@@ -55,18 +57,26 @@ func modelsResolve(argv []string, stdout io.Writer, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	format := fs.String("format", "json", "json")
 	model := fs.String("model", "", "explicit model")
+	surface := fs.String("surface", "", "delivery surface")
 	if err := fs.Parse(argv); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
 		return 2
 	}
+	if err := validateFormat(*format); err != nil {
+		return emitCLIError(stdout, stderr, *format == "json", err.Error(), 2)
+	}
 	args := fs.Args()
-	if len(args) != 1 {
-		fmt.Fprintln(stderr, "ai-dispatch models resolve: expected exactly one target")
+	if len(args) > 1 {
+		fmt.Fprintln(stderr, "ai-dispatch models resolve: expected at most one target")
 		return 2
 	}
-	target, err := routing.Resolve(args[0], *model)
+	rawTarget := ""
+	if len(args) == 1 {
+		rawTarget = args[0]
+	}
+	target, err := routing.ResolveSurface(rawTarget, *model, *surface)
 	if err != nil {
 		return emitCLIError(stdout, stderr, *format == "json", err.Error(), 2)
 	}

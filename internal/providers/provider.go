@@ -33,7 +33,7 @@ type EffortRequest struct {
 	Model           string
 	Requested       contract.Effort
 	ProviderOptions map[string]string
-	// DeclaredEfforts comes from config ModelRoute.efforts for this candidate.
+	// DeclaredEfforts comes from config ModelTarget.efforts for this candidate.
 	// Empty means undeclared: explicit --effort falls back to auto.
 	DeclaredEfforts []string
 }
@@ -53,7 +53,7 @@ type EffortResolution struct {
 type FastRequest struct {
 	Model     string
 	Requested bool
-	// DeclaredFast comes from config ModelRoute.fast. nil means undeclared:
+	// DeclaredFast comes from config ModelTarget.fast. nil means undeclared:
 	// --fast falls back to standard speed.
 	DeclaredFast *bool
 }
@@ -136,7 +136,7 @@ func FastUnavailable(requested bool, reason string) FastResolution {
 	return FastResolution{Requested: true, Fallback: true, Reason: reason}
 }
 
-// ResolveEffortFromDeclared uses config ModelRoute.efforts as execution authority.
+// ResolveEffortFromDeclared uses config ModelTarget.efforts as execution authority.
 // Missing/empty declaration means explicit levels fall back to auto. Membership is
 // exact; there is no nearest-neighbor clamp.
 func ResolveEffortFromDeclared(req EffortRequest, provider string) EffortResolution {
@@ -160,7 +160,7 @@ func ResolveEffortFromDeclared(req EffortRequest, provider string) EffortResolut
 			requested, strings.Join(req.DeclaredEfforts, ","), provider, label))
 }
 
-// ResolveFastFromDeclared uses config ModelRoute.fast as execution authority.
+// ResolveFastFromDeclared uses config ModelTarget.fast as execution authority.
 func ResolveFastFromDeclared(req FastRequest, provider string) FastResolution {
 	if !req.Requested {
 		return FastStandard(false)

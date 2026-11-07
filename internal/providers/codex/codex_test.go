@@ -14,12 +14,13 @@ import (
 )
 
 func TestBuildCodexArgsAutoDoesNotHardcodeHigh(t *testing.T) {
+	binary := fakeCodexBinary(t)
 	target := routing.DispatchTarget{Requested: "gpt5.5", Provider: "codex", Model: "gpt-5.5"}
 	spec, err := Provider{}.Build(providers.BuildRequest{Prompt: "hello", Target: target, Effort: contract.EffortAuto})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "--json", "--model", "gpt-5.5", "hello"}
+	want := []string{binary, "exec", "--dangerously-bypass-approvals-and-sandbox", "--json", "--model", "gpt-5.5", "hello"}
 	if len(spec.Args) != len(want) {
 		t.Fatalf("args=%#v", spec.Args)
 	}
@@ -35,24 +36,26 @@ func TestBuildCodexArgsAutoDoesNotHardcodeHigh(t *testing.T) {
 }
 
 func TestBuildCodexArgsExactEffort(t *testing.T) {
+	binary := fakeCodexBinary(t)
 	target := routing.DispatchTarget{Requested: "gpt5.6", Provider: "codex", Model: "gpt-5.6"}
 	spec, err := Provider{}.Build(providers.BuildRequest{Prompt: "hello", Target: target, Effort: contract.EffortXHigh})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "--json", "-c", `model_reasoning_effort="xhigh"`, "--model", "gpt-5.6", "hello"}
+	want := []string{binary, "exec", "--dangerously-bypass-approvals-and-sandbox", "--json", "-c", `model_reasoning_effort="xhigh"`, "--model", "gpt-5.6", "hello"}
 	if strings.Join(spec.Args, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("args=%#v want=%#v", spec.Args, want)
 	}
 }
 
 func TestBuildCodexArgsFastUsesPriorityServiceTier(t *testing.T) {
+	binary := fakeCodexBinary(t)
 	target := routing.DispatchTarget{Requested: "gpt5.6-luna", Provider: "codex", Model: "gpt-5.6-luna"}
 	spec, err := Provider{}.Build(providers.BuildRequest{Prompt: "hello", Target: target, Effort: contract.EffortMax, Fast: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "--json", "-c", `model_reasoning_effort="max"`, "-c", `service_tier="priority"`, "--model", "gpt-5.6-luna", "hello"}
+	want := []string{binary, "exec", "--dangerously-bypass-approvals-and-sandbox", "--json", "-c", `model_reasoning_effort="max"`, "-c", `service_tier="priority"`, "--model", "gpt-5.6-luna", "hello"}
 	if strings.Join(spec.Args, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("args=%#v want=%#v", spec.Args, want)
 	}
@@ -109,6 +112,7 @@ func TestResolveCodexFast(t *testing.T) {
 }
 
 func TestBuildCodexPromptFileUsesStdin(t *testing.T) {
+	fakeCodexBinary(t)
 	target := routing.DispatchTarget{Requested: "gpt5.5", Provider: "codex", Model: "gpt-5.5"}
 	promptFile := filepath.Join(t.TempDir(), "prompt.md")
 	if err := os.WriteFile(promptFile, []byte("prompt from file"), 0o600); err != nil {
@@ -132,6 +136,7 @@ func TestBuildCodexPromptFileUsesStdin(t *testing.T) {
 }
 
 func TestBuildCodexRejectsOpenRouterModel(t *testing.T) {
+	fakeCodexBinary(t)
 	target := routing.DispatchTarget{Requested: "bad", Provider: "codex", Model: "openrouter/xiaomi/mimo-v2.5-pro"}
 	_, err := Provider{}.Build(providers.BuildRequest{Prompt: "hello", Target: target})
 	if err == nil || !strings.Contains(err.Error(), "cannot run OpenRouter model") {
@@ -187,4 +192,14 @@ func TestParseCodexUsageLimitWithLoaderWarningsAsQuota(t *testing.T) {
 	if result.Stderr == "" || result.Stderr == "2026-06-16T10:12:01Z WARN codex_core_skills::loader: ignoring interface.icon_small\n" {
 		t.Fatalf("stderr was not cleaned: %q", result.Stderr)
 	}
+}
+
+func fakeCodexBinary(t *testing.T) string {
+	t.Helper()
+	binary := filepath.Join(t.TempDir(), "codex")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AI_DISPATCH_CODEX_BIN", binary)
+	return binary
 }

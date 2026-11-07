@@ -1,55 +1,57 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
-const Version = 1
+// Version identifies the config schema, not a provider CLI release.
+const Version = 2
 
 type Config struct {
 	Version           int             `json:"version"`
-	ClaudeTransport   string          `json:"claude_transport"`
+	Defaults          DefaultsConfig  `json:"defaults"`
+	ClaudeTransport   string          `json:"claude_transport,omitempty"`
 	UserFacingSummary *bool           `json:"user_facing_summary,omitempty"`
 	Models            ModelsConfig    `json:"models"`
 	Providers         ProvidersConfig `json:"providers"`
 }
 
-func (c Config) UserFacingSummaryEnabled() bool {
-	if c.UserFacingSummary == nil {
-		return false
-	}
-	return *c.UserFacingSummary
+type DefaultsConfig struct {
+	Provider string `json:"provider"`
+	Surface  string `json:"surface"`
+	Model    string `json:"model,omitempty"`
 }
 
-type ModelsConfig map[string][]ModelRoute
+type ModelsConfig map[string]ModelEntry
 
-type ModelRoute struct {
-	Provider string   `json:"provider"`
-	Model    string   `json:"model,omitempty"`
-	// Efforts is the declared capability list and preference order for this
-	// candidate. It is not a default effort value. Missing/empty means
-	// undeclared: send applies auto only (provider/CLI default).
+type ModelEntry struct {
+	Aliases []string                          `json:"aliases,omitempty"`
+	Targets map[string]map[string]ModelTarget `json:"targets"`
+}
+
+type ModelTarget struct {
+	Model   string   `json:"model"`
+	Origin  string   `json:"origin"`
 	Efforts []string `json:"efforts,omitempty"`
-	// Fast declares whether --fast may be applied for this candidate.
-	// nil means undeclared (do not apply --fast).
-	Fast *bool `json:"fast,omitempty"`
+	Fast    *bool    `json:"fast,omitempty"`
 }
 
-// ProviderStatus records runtime availability of a single provider binary.
-// It intentionally keeps only a shareable summary: no absolute binary paths
-// and no full model lists.
 type ProviderStatus struct {
-	Available         bool   `json:"available"`
-	Version           string `json:"version,omitempty"`
-	CatalogModelCount int    `json:"catalog_model_count,omitempty"`
-	Error             string `json:"error,omitempty"`
+	Executable string   `json:"executable"`
+	Surfaces   []string `json:"surfaces"`
+	Error      string   `json:"error,omitempty"`
 }
 
 type ProvidersConfig map[string]ProviderStatus
+
+func (c Config) UserFacingSummaryEnabled() bool {
+	return c.UserFacingSummary != nil && *c.UserFacingSummary
+}
 
 func HomeDir() string {
 	if value := os.Getenv("AI_DISPATCH_HOME"); value != "" {
@@ -62,115 +64,111 @@ func HomeDir() string {
 	return filepath.Join(home, ".ai-dispatch")
 }
 
-func ConfigPath() string {
-	if value := os.Getenv("AI_DISPATCH_CONFIG"); value != "" {
-		return value
-	}
-	return filepath.Join(HomeDir(), "config.json")
-}
+func ConfigPath() string      { return pathOverride("AI_DISPATCH_CONFIG", "config.json") }
+func PreferencesPath() string { return pathOverride("AI_DISPATCH_PREFERENCES", "preferences.md") }
+func RunsDir() string         { return pathOverride("AI_DISPATCH_RUNS_DIR", "runs") }
+func LogsDir() string         { return pathOverride("AI_DISPATCH_LOGS_DIR", "logs") }
 
-func PreferencesPath() string {
-	if value := os.Getenv("AI_DISPATCH_PREFERENCES"); value != "" {
+func pathOverride(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
 		return value
 	}
-	return filepath.Join(HomeDir(), "preferences.md")
-}
-
-func RunsDir() string {
-	if value := os.Getenv("AI_DISPATCH_RUNS_DIR"); value != "" {
-		return value
-	}
-	return filepath.Join(HomeDir(), "runs")
-}
-
-func LogsDir() string {
-	if value := os.Getenv("AI_DISPATCH_LOGS_DIR"); value != "" {
-		return value
-	}
-	return filepath.Join(HomeDir(), "logs")
+	return filepath.Join(HomeDir(), fallback)
 }
 
 func Default() Config {
 	return Config{
 		Version:         Version,
-		ClaudeTransport: "print",
-		Models:          ModelsConfig{},
-		Providers:       ProvidersConfig{},
+		Defaults:        DefaultsConfig{Provider: "omp", Surface: "cli", Model: "gpt-6.1-sol"},
+		ClaudeTransport: "print", Models: ModelsConfig{}, Providers: ProvidersConfig{},
 	}
 }
 
 func Load() (Config, error) {
-	path := ConfigPath()
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(ConfigPath())
 	if os.IsNotExist(err) {
 		return Default(), nil
 	}
 	if err != nil {
 		return Config{}, err
 	}
-	cfg, err := decodeConfig(data)
+	cfg, err := Decode(data)
 	if err != nil {
-		return Config{}, fmt.Errorf("read %s: %w", path, err)
-	}
-	return normalize(cfg)
-}
-
-func decodeConfig(data []byte) (Config, error) {
-	raw := map[string]json.RawMessage{}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return Config{}, err
-	}
-	cfg := Default()
-	if value, ok := raw["version"]; ok {
-		if err := json.Unmarshal(value, &cfg.Version); err != nil {
-			return Config{}, fmt.Errorf("version must be an integer")
-		}
-	}
-	if value, ok := raw["claude_transport"]; ok {
-		if err := json.Unmarshal(value, &cfg.ClaudeTransport); err != nil {
-			return Config{}, fmt.Errorf("claude_transport must be a string")
-		}
-	}
-	if value, ok := raw["models"]; ok {
-		models, err := decodeModels(value)
-		if err != nil {
-			return Config{}, err
-		}
-		cfg.Models = models
-	}
-	if value, ok := raw["providers"]; ok {
-		if err := json.Unmarshal(value, &cfg.Providers); err != nil {
-			return Config{}, fmt.Errorf("providers must be an object")
-		}
-	}
-	if value, ok := raw["user_facing_summary"]; ok && string(value) != "null" {
-		var enabled bool
-		if err := json.Unmarshal(value, &enabled); err != nil {
-			return Config{}, fmt.Errorf("user_facing_summary must be a boolean")
-		}
-		cfg.UserFacingSummary = &enabled
+		return Config{}, fmt.Errorf("read %s: %w", ConfigPath(), err)
 	}
 	return cfg, nil
 }
 
-func decodeModels(data json.RawMessage) (ModelsConfig, error) {
-	if len(data) == 0 || string(data) == "null" {
-		return ModelsConfig{}, nil
+// Decode reads only the current schema; migration is an explicit operation.
+func Decode(data []byte) (Config, error) {
+	var header struct {
+		Version int `json:"version"`
 	}
-	raw := map[string]json.RawMessage{}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("models must be an object")
+	if err := json.Unmarshal(data, &header); err != nil {
+		return Config{}, err
 	}
-	models := ModelsConfig{}
-	for key, value := range raw {
-		normalizedKey := strings.TrimSpace(key)
-		var routes []ModelRoute
-		if err := json.Unmarshal(value, &routes); err != nil {
-			return nil, fmt.Errorf("models.%s must be an array of provider/model candidates", key)
-		}
-		models[normalizedKey] = routes
+	if header.Version != 0 && header.Version != Version {
+		return Config{}, fmt.Errorf("config schema version %d is unsupported; run config migrate before using this runtime", header.Version)
 	}
-	return models, nil
+	cfg := Default()
+	if err := strictDecode(data, &cfg); err != nil {
+		return Config{}, fmt.Errorf("invalid config: %w", err)
+	}
+	return normalize(cfg)
+}
+
+func decodeConfig(data []byte) (Config, error) { return Decode(data) }
+
+func strictDecode(data []byte, value any) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return fmt.Errorf("expected an object, got null")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(value); err != nil {
+		return err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return fmt.Errorf("expected one JSON value")
+	}
+	return nil
+}
+
+func Validate(cfg Config) error { _, err := normalize(cfg); return err }
+
+// Save atomically replaces a validated config. Update callers must hold their
+// lock across reload, merge and Save to avoid lost updates.
+func Save(cfg Config) error {
+	cfg, err := normalize(cfg)
+	if err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := ConfigPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	_, writeErr := tmp.Write(append(data, '\n'))
+	closeErr := tmp.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 func EnsurePreferences() (bool, error) {
@@ -190,95 +188,9 @@ func ValidClaudeTransport(value string) bool {
 	switch value {
 	case "print", "pty", "auto", "disabled":
 		return true
-	default:
-		return false
 	}
+	return false
 }
 
-// Save writes the config atomically: temp file + rename. The temp file uses
-// the PID so two processes don't collide on the same temp path.
-func Save(cfg Config) error {
-	path := ConfigPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	if cfg.Version == 0 {
-		cfg.Version = Version
-	}
-	if cfg.ClaudeTransport == "" {
-		cfg.ClaudeTransport = "print"
-	}
-	if cfg.Models == nil {
-		cfg.Models = ModelsConfig{}
-	}
-	if cfg.Providers == nil {
-		cfg.Providers = ProvidersConfig{}
-	}
-	if _, err := normalize(cfg); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := fmt.Sprintf("%s.tmp.%d", path, os.Getpid())
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}
-
-func normalize(cfg Config) (Config, error) {
-	if cfg.Version == 0 {
-		cfg.Version = Version
-	}
-	if cfg.ClaudeTransport == "" {
-		cfg.ClaudeTransport = "print"
-	}
-	if !ValidClaudeTransport(cfg.ClaudeTransport) {
-		return Config{}, fmt.Errorf("claude_transport must be print, pty, auto, or disabled")
-	}
-	if cfg.Models == nil {
-		cfg.Models = ModelsConfig{}
-	}
-	if cfg.Providers == nil {
-		cfg.Providers = ProvidersConfig{}
-	}
-	for key, routes := range cfg.Models {
-		if strings.TrimSpace(key) == "" {
-			return Config{}, fmt.Errorf("models contains an empty key")
-		}
-		for i, route := range routes {
-			if strings.TrimSpace(route.Provider) == "" {
-				return Config{}, fmt.Errorf("models.%s[%d].provider is required", key, i)
-			}
-			for j, effort := range route.Efforts {
-				normalized := strings.TrimSpace(effort)
-				if normalized == "" {
-					return Config{}, fmt.Errorf("models.%s[%d].efforts[%d] is empty", key, i, j)
-				}
-				if normalized == "auto" {
-					return Config{}, fmt.Errorf("models.%s[%d].efforts must not include auto; omit efforts for undeclared/auto-only", key, i)
-				}
-				switch normalized {
-				case "none", "minimal", "low", "medium", "high", "xhigh", "max":
-				default:
-					return Config{}, fmt.Errorf("models.%s[%d].efforts[%d] unsupported effort %q; want none|minimal|low|medium|high|xhigh|max", key, i, j, effort)
-				}
-				route.Efforts[j] = normalized
-			}
-			routes[i] = route
-		}
-		cfg.Models[key] = routes
-	}
-	return cfg, nil
-}
-
-func StateMissing() bool {
-	return fileMissing(ConfigPath()) || fileMissing(PreferencesPath())
-}
-
-func fileMissing(path string) bool {
-	_, err := os.Stat(path)
-	return os.IsNotExist(err)
-}
+func StateMissing() bool           { return fileMissing(ConfigPath()) || fileMissing(PreferencesPath()) }
+func fileMissing(path string) bool { _, err := os.Stat(path); return os.IsNotExist(err) }

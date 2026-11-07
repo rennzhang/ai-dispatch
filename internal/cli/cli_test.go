@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rennzhang/ai-dispatch/internal/config"
 	"github.com/rennzhang/ai-dispatch/internal/contract"
 	"github.com/rennzhang/ai-dispatch/internal/runstore"
 )
@@ -17,8 +18,22 @@ import (
 // the developer's shell environment. main.go sets the default to "on" for
 // production, but tests must not hit the network.
 func TestMain(m *testing.M) {
+	testHome, err := os.MkdirTemp("", "dispatch-cli-tests-*")
+	if err != nil {
+		panic(err)
+	}
+	if os.Getenv("AI_DISPATCH_CLI_SIGNAL_HELPER") != "1" {
+		os.Setenv("AI_DISPATCH_HOME", testHome)
+		for _, name := range []string{"AI_DISPATCH_CONFIG", "AI_DISPATCH_PREFERENCES", "AI_DISPATCH_RUNS_DIR", "AI_DISPATCH_LOGS_DIR"} {
+			os.Unsetenv(name)
+		}
+	}
 	os.Setenv("AI_DISPATCH_GO_PROVIDER_EXECUTION", "off")
-	os.Exit(m.Run())
+	scanLocalProviders = fakeCLIScan
+	initializeLocalProviders = fakeCLIInit
+	code := m.Run()
+	os.RemoveAll(testHome)
+	os.Exit(code)
 }
 
 func TestDoctorJSON(t *testing.T) {
@@ -135,16 +150,9 @@ func TestDoctorJSONIsCompact(t *testing.T) {
 	t.Setenv("ANTHROPIC_MODEL", "private-model-name")
 	t.Setenv("ANTHROPIC_BASE_URL", "https://private.example.test")
 	writeCLIConfig(t, filepath.Join(home, "config.json"), `{
-  "version": 1,
-  "claude_transport": "print",
-  "models": {
-    "private-alias": [
-      { "provider": "opencode", "model": "private/provider-model" }
-    ]
-  },
-  "providers": {
-    "opencode": { "available": true, "version": "1.17.3", "catalog_model_count": 42 }
-  }
+ "version":2,
+ "models":{"private-alias":{"targets":{"opencode":{"cli":{"model":"private/provider-model"}}}}},
+ "providers":{"opencode":{"executable":"/private/example/opencode","surfaces":["cli"]}}
 }`)
 	var stdout, stderr bytes.Buffer
 	code := Main([]string{"doctor", "--format", "json"}, &stdout, &stderr)
@@ -157,7 +165,7 @@ func TestDoctorJSONIsCompact(t *testing.T) {
 			t.Fatalf("doctor leaked %q: %s", forbidden, text)
 		}
 	}
-	if !strings.Contains(text, `"model_alias_count":1`) || !strings.Contains(text, `"catalog_model_count":42`) {
+	if !strings.Contains(text, `"model_alias_count":1`) || !strings.Contains(text, `"provider_status_count":1`) {
 		t.Fatalf("doctor should keep compact counts: %s", text)
 	}
 }
@@ -178,7 +186,7 @@ func TestLegacyConfigRegistryPathFailsClosed(t *testing.T) {
 }`)
 	var stdout, stderr bytes.Buffer
 	code := Main([]string{"models", "resolve", "mimo-pro"}, &stdout, &stderr)
-	if code == 0 || !strings.Contains(stdout.String()+stderr.String(), "models.registry_path") {
+	if code == 0 || !strings.Contains(stdout.String()+stderr.String(), "config migrate") {
 		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 }
@@ -298,7 +306,7 @@ func TestGuideModelsPrintsConfigGuide(t *testing.T) {
 		t.Fatalf("code=%d stderr=%s", code, stderr.String())
 	}
 	text := stdout.String()
-	for _, want := range []string{"# 模型指南", "## Configured short names", "provider_used", "唯一可执行短名路由"} {
+	for _, want := range []string{"# 模型与入口", "默认：omp / cli / gpt-6.1-sol", "显式入口和模型优先", "不触发跨入口降级", "resume 继承已记录渠道"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in guide:\n%s", want, text)
 		}
@@ -361,7 +369,6 @@ func TestModelsResolveRejectsColonRouteSyntax(t *testing.T) {
 	for _, args := range [][]string{
 		{"models", "resolve", "cursor:opus5", "--format", "json"},
 		{"models", "resolve", "opus5:cursor", "--format", "json"},
-		{"models", "resolve", "cursor", "--model", "opus5:cursor", "--format", "json"},
 	} {
 		var stdout, stderr bytes.Buffer
 		code := Main(args, &stdout, &stderr)
@@ -404,23 +411,14 @@ func TestModelsResolveFastCapabilityJSON(t *testing.T) {
 }
 
 func TestModelsResolveGrokJSON(t *testing.T) {
-	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
 	home := t.TempDir()
 	t.Setenv("AI_DISPATCH_HOME", home)
 	t.Setenv("AI_DISPATCH_CONFIG", filepath.Join(home, "config.json"))
 	writeCLIConfig(t, filepath.Join(home, "config.json"), `{
-  "version": 1,
-  "claude_transport": "print",
-  "models": {
-    "grok": [
-      { "provider": "grok", "model": "grok-4.5" },
-      { "provider": "opencode", "model": "openrouter/x-ai/grok-4.5" }
-    ]
-  },
-  "providers": {}
-}`)
+ "models":{"grok-4.7":{"targets":{"grok":{"cli":{"model":"grok-4.7","origin":"scan"}},"omp":{"cli":{"model":"magpie/grok/grok-4.7","origin":"scan"}}}}}
+ }`)
 	var stdout, stderr bytes.Buffer
-	code := Main([]string{"models", "resolve", "grok"}, &stdout, &stderr)
+	code := Main([]string{"models", "resolve", "grok", "--model", "grok-4.7"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -428,74 +426,54 @@ func TestModelsResolveGrokJSON(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["Provider"] != "grok" && payload["provider"] != "grok" {
+	if payload["provider"] != "grok" || payload["model"] != "grok-4.7" || payload["surface"] != "cli" || payload["fast"] != false {
 		t.Fatalf("payload=%v", payload)
 	}
-	candidates, _ := payload["candidates"].([]any)
-	if len(candidates) != 2 {
-		t.Fatalf("expected configured grok candidate chain, payload=%v", payload)
-	}
-	if payload["fast"] != false {
-		t.Fatalf("grok primary candidate must report fast=false, payload=%v", payload)
+	if _, exists := payload["candidates"]; exists {
+		t.Fatalf("routing must not expose fallback candidates: %v", payload)
 	}
 }
 
 func TestProvidersScanTextIncludesGrok(t *testing.T) {
-	home := t.TempDir()
-	bin := filepath.Join(t.TempDir(), "grok")
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho 'grok 0.2.93'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("AI_DISPATCH_HOME", home)
-	t.Setenv("AI_DISPATCH_GROK_BIN", bin)
+	t.Setenv("AI_DISPATCH_HOME", t.TempDir())
 	var stdout, stderr bytes.Buffer
 	code := Main([]string{"providers", "scan"}, &stdout, &stderr)
-	if code != 0 {
+	if code != 0 || !strings.Contains(stdout.String(), "grok: available") {
 		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "grok: available (grok 0.2.93)") {
-		t.Fatalf("stdout=%s", stdout.String())
+	if strings.Contains(stdout.String(), "version") {
+		t.Fatalf("versions do not belong in persisted discovery: %s", stdout.String())
 	}
 }
 
-func TestModelsListsConfigAndProvidersOnly(t *testing.T) {
-	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+func TestModelsListsObjectsAndAliasesWithoutFallbackCandidates(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("AI_DISPATCH_HOME", home)
-	t.Setenv("AI_DISPATCH_CONFIG", filepath.Join(home, "config.json"))
 	writeCLIConfig(t, filepath.Join(home, "config.json"), `{
-  "version": 1,
-  "claude_transport": "print",
-  "models": {
-    "mimo-pro": [
-      { "provider": "opencode", "model": "openrouter/xiaomi/mimo-v2.5-pro" }
-    ]
-  },
-  "providers": {}
-}`)
+ "models":{"mimo-v2.5-pro":{"aliases":["mimo-pro"],"targets":{"opencode":{"cli":{"model":"openrouter/xiaomi/mimo-v2.5-pro"}}}}}
+ }`)
 	var stdout, stderr bytes.Buffer
 	code := Main([]string{"models", "--format", "json"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	var payload struct {
-		Targets []string `json:"targets"`
+		OK       bool                  `json:"ok"`
+		Defaults config.DefaultsConfig `json:"defaults"`
+		Models   config.ModelsConfig   `json:"models"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	for _, target := range []string{"mimo-pro", "codex", "cursor", "claude"} {
-		if !containsString(payload.Targets, target) {
-			t.Fatalf("missing %q in targets=%v", target, payload.Targets)
-		}
+	entry, ok := payload.Models["mimo-v2.5-pro"]
+	if !payload.OK || !ok || !reflect.DeepEqual(entry.Aliases, []string{"mimo-pro"}) || entry.Targets["opencode"]["cli"].Model != "openrouter/xiaomi/mimo-v2.5-pro" {
+		t.Fatalf("payload=%+v", payload)
 	}
-	for _, target := range []string{"mimo-openrouter-pro", "kimi", "gpt5.5"} {
-		if containsString(payload.Targets, target) {
-			t.Fatalf("registry leftover %q still advertised: %v", target, payload.Targets)
-		}
+	if payload.Defaults.Provider != "omp" || payload.Defaults.Model != "gpt-6.1-sol" {
+		t.Fatalf("defaults=%+v", payload.Defaults)
 	}
-	if containsString(payload.Targets, "mimo") {
-		t.Fatalf("ambiguous mimo alias should not be listed: %v", payload.Targets)
+	if strings.Contains(stdout.String(), `"candidates"`) || strings.Contains(stdout.String(), `"registry_path"`) {
+		t.Fatalf("legacy directory leaked: %s", stdout.String())
 	}
 }
 
@@ -660,13 +638,11 @@ func writeCodexModelConfig(t *testing.T) {
 	path := filepath.Join(home, "config.json")
 	t.Setenv("AI_DISPATCH_CONFIG", path)
 	writeCLIConfig(t, path, `{
-  "version": 1,
-  "claude_transport": "print",
-  "models": {
-    "gpt5.5": [{"provider": "codex", "model": "gpt-5.5", "fast": true}],
-    "gpt5.6-luna": [{"provider": "codex", "model": "gpt-5.6-luna", "efforts": ["low","medium","high","xhigh","max"], "fast": true}]
-  },
-  "providers": {}
+ "version":2,"defaults":{"provider":"codex","surface":"cli","model":"gpt-5.5"},
+ "models":{
+  "gpt-5.5":{"aliases":["gpt5.5"],"targets":{"codex":{"cli":{"model":"gpt-5.5","fast":true}}}},
+  "gpt-5.6-luna":{"aliases":["gpt5.6-luna"],"targets":{"codex":{"cli":{"model":"gpt-5.6-luna","efforts":["low","medium","high","xhigh","max"],"fast":true}}}}
+ }
 }`)
 }
 

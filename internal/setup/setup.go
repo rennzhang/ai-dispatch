@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"time"
@@ -10,7 +11,7 @@ import (
 
 // FirstRunHint is the message injected into the first ProviderResult after a
 // config setup, so the calling Agent knows to tell the user about preferences.
-const FirstRunHint = "本次是首次使用 dispatch skill。完成后请提醒用户：1) 在 ~/.ai-dispatch/preferences.md 设定模型调用偏好；2) 更新 config.json models 候选池时确认是否为各候选配置 efforts（档位能力与偏好顺序）和 fast；未配置则 send 时 effort/fast 仅走 auto/标准速度。"
+const FirstRunHint = "本次是首次使用 dispatch skill。默认入口为 OMP，默认模型为 Sol。请运行 providers scan 发现本机入口和模型；config.json 保存默认选择、入口与模型对应关系，preferences.md 只保存场景偏好。未声明的 effort/fast 保持 auto/标准速度。"
 
 // Summary captures the initialization details for surfacing to the calling
 // Agent on the first run. It is only populated when FirstRun is true.
@@ -25,9 +26,10 @@ type Summary struct {
 
 // Result describes what happened during a config setup pass.
 type Result struct {
-	FirstRun bool
-	Config   config.Config
-	Summary  *Summary
+	FirstRun   bool
+	Config     config.Config
+	Summary    *Summary
+	ScanReport *ScanReport
 }
 
 // Options controls config setup behavior.
@@ -49,8 +51,8 @@ func Ensure() (Result, error) {
 
 // Run unconditionally initializes the runtime. Provider probing only happens
 // when ScanProviders is true, so normal send/resume stays side-effect-light.
-// config.Save is atomic (temp+rename), so concurrent config setups won't corrupt
-// the config — the last writer wins with a valid file.
+// Discovery runs before one locked commit, so concurrent default/model edits
+// are not overwritten by an intermediate initialization save.
 func Run(opts Options) (Result, error) {
 	for _, dir := range []string{config.HomeDir(), config.RunsDir(), config.LogsDir()} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -63,37 +65,20 @@ func Run(opts Options) (Result, error) {
 		return Result{}, fmt.Errorf("ensure preferences: %w", err)
 	}
 
-	var cfg config.Config
-	if opts.Force {
-		cfg = config.Default()
-	} else {
-		var err error
-		cfg, err = config.Load()
-		if err != nil {
-			return Result{}, fmt.Errorf("load existing config: %w", err)
-		}
+	cfg, snapshot, err := initializationSnapshot(opts.Force)
+	if err != nil {
+		return Result{}, fmt.Errorf("load config: %w", err)
+	}
+	var discovered map[string]discoveredProvider
+	if opts.ScanProviders {
+		discovered = collectDiscovery(cfg, false)
+	}
+	cfg, scan, err := initializeConfig(opts, snapshot, discovered)
+	if err != nil {
+		return Result{}, fmt.Errorf("initialize config: %w", err)
 	}
 	firstRun := configMissing || preferencesCreated
-
-	if opts.ClaudeTransport != "" {
-		cfg.ClaudeTransport = opts.ClaudeTransport
-	}
-	if cfg.Version == 0 {
-		cfg.Version = config.Version
-	}
-	if cfg.ClaudeTransport == "" {
-		cfg.ClaudeTransport = "print"
-	}
-
 	now := time.Now().UTC().Format(time.RFC3339)
-	if opts.ScanProviders {
-		cfg.Providers = ProbeAll(false)
-	}
-	if opts.Force || configMissing || opts.ScanProviders {
-		if err := config.Save(cfg); err != nil {
-			return Result{FirstRun: firstRun, Config: cfg}, fmt.Errorf("save config: %w", err)
-		}
-	}
 	var summary *Summary
 	if firstRun {
 		summary = &Summary{
@@ -107,19 +92,59 @@ func Run(opts Options) (Result, error) {
 			summary.Providers = cfg.Providers
 		}
 	}
-	return Result{FirstRun: firstRun, Config: cfg, Summary: summary}, nil
+	return Result{FirstRun: firstRun, Config: cfg, Summary: summary, ScanReport: scan}, nil
 }
 
-// Rescan re-probes providers and updates only the providers diagnostic summary.
-// Used by `providers scan`. When refresh is true, opencode re-fetches its model
-// cache from models.dev first.
-func Rescan(refresh bool) (config.Config, error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return cfg, err
+func initializationSnapshot(force bool) (config.Config, []byte, error) {
+	raw, err := os.ReadFile(config.ConfigPath())
+	if os.IsNotExist(err) {
+		return config.Default(), nil, nil
 	}
-	cfg.Providers = ProbeAll(refresh)
-	return cfg, config.Save(cfg)
+	if err != nil {
+		return config.Config{}, nil, err
+	}
+	if force {
+		return config.Default(), raw, nil
+	}
+	cfg, err := config.Decode(raw)
+	return cfg, raw, err
+}
+
+func initializeConfig(opts Options, snapshot []byte, discovered map[string]discoveredProvider) (config.Config, *ScanReport, error) {
+	var cfg config.Config
+	var report *ScanReport
+	err := WithConfigLock(func() error {
+		var err error
+		if opts.Force {
+			current, readErr := os.ReadFile(config.ConfigPath())
+			if readErr != nil && !os.IsNotExist(readErr) {
+				return readErr
+			}
+			if !bytes.Equal(current, snapshot) {
+				return fmt.Errorf("config changed during init --force; no changes written")
+			}
+			cfg = config.Default()
+		} else {
+			cfg, err = config.Load()
+			if err != nil {
+				return err
+			}
+		}
+		if opts.ClaudeTransport != "" {
+			cfg.ClaudeTransport = opts.ClaudeTransport
+		}
+		if opts.ScanProviders {
+			value := discoveryReport(discovered, false)
+			report = &value
+			mergeDiscovery(&cfg, discovered, report)
+			report.Config = cfg
+		}
+		if opts.Force || opts.ScanProviders || fileMissing(config.ConfigPath()) || opts.ClaudeTransport != "" {
+			return config.Save(cfg)
+		}
+		return nil
+	})
+	return cfg, report, err
 }
 
 func fileMissing(path string) bool {

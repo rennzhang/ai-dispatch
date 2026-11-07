@@ -14,6 +14,7 @@ import (
 
 	"github.com/rennzhang/ai-dispatch/internal/contract"
 	"github.com/rennzhang/ai-dispatch/internal/diagnostics"
+	"github.com/rennzhang/ai-dispatch/internal/providerinfo"
 	"github.com/rennzhang/ai-dispatch/internal/providers"
 	"github.com/rennzhang/ai-dispatch/internal/runtime"
 )
@@ -121,7 +122,14 @@ func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 	if req.TimeoutSeconds > 0 {
 		args = append(args, "--print-timeout", durationArg(req.TimeoutSeconds))
 	}
-	if bin := providerOpt(req, "bin"); bin != "" {
+	bin := providerOpt(req, "bin")
+	if bin == "" && req.Target.Executable != "" {
+		bin, err = providerinfo.ResolveBinary("antigravity", req.Target.Executable)
+		if err != nil {
+			return runtime.CommandSpec{}, err
+		}
+	}
+	if bin != "" {
 		args = append(args, "--agy-bin", bin)
 	}
 	if root := providerOpt(req, "root"); root != "" {

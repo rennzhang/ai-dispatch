@@ -35,7 +35,7 @@ func TestCLISignalCancellation(t *testing.T) {
 				t.Fatal(err)
 			}
 			configPath := filepath.Join(root, "config.json")
-			writeCLIConfig(t, configPath, `{"version":1,"claude_transport":"print","models":{},"providers":{}}`)
+			writeCLIConfig(t, configPath, `{"version":2,"claude_transport":"print","models":{},"providers":{}}`)
 			if err := os.WriteFile(filepath.Join(root, "preferences.md"), []byte("# test preferences\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}

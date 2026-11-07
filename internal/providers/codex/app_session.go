@@ -1,14 +1,12 @@
 package codex
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -25,9 +23,12 @@ const (
 // appEnvelope is the stdout contract between the Desktop channel and Parse.
 // It is not a Codex CLI stream event.
 type appEnvelope struct {
-	Surface   string `json:"surface"`
-	SessionID string `json:"session_id"`
-	Text      string `json:"text"`
+	Surface   string   `json:"surface"`
+	SessionID string   `json:"session_id"`
+	Text      string   `json:"text"`
+	State     string   `json:"state"`
+	Error     string   `json:"error,omitempty"`
+	Warnings  []string `json:"warnings,omitempty"`
 }
 
 func (Provider) RunDirect(ctx context.Context, req providers.BuildRequest) (runtime.RunResult, bool, error) {
@@ -37,7 +38,15 @@ func (Provider) RunDirect(ctx context.Context, req providers.BuildRequest) (runt
 	started := time.Now()
 	text, sessionID, err := runAppSurface(ctx, req)
 	result := runtime.RunResult{DurationMS: time.Since(started).Milliseconds(), CleanupComplete: true}
-	raw, marshalErr := json.Marshal(appEnvelope{Surface: surfaceApp, SessionID: sessionID, Text: text})
+	state, reason := "completed", ""
+	if err != nil {
+		state, reason = "failed", err.Error()
+	}
+	var warnings []string
+	if errors.Is(ctx.Err(), context.Canceled) || errors.Is(err, context.Canceled) {
+		warnings = append(warnings, "Stopped waiting for Codex Desktop; its queued or running turn may still execute. Check the retained session in the same Desktop instance before retrying.")
+	}
+	raw, marshalErr := json.Marshal(appEnvelope{Surface: surfaceApp, SessionID: sessionID, Text: text, State: state, Error: reason, Warnings: warnings})
 	if marshalErr == nil {
 		result.Stdout = append(raw, '\n')
 	}
@@ -58,35 +67,70 @@ func runAppSurface(ctx context.Context, req providers.BuildRequest) (string, str
 	if err != nil {
 		return "", "", err
 	}
-	if req.SessionID == "" {
-		return startDesktopThread(ctx, req, prompt)
+	prompt, err = uniqueDesktopPrompt(prompt)
+	if err != nil {
+		return "", req.SessionID, err
 	}
-	return continueDesktopThread(ctx, req, prompt)
+	host, err := resolveDesktopHost(ctx)
+	if err != nil {
+		return "", req.SessionID, err
+	}
+	host, err = ensureDesktopRunning(ctx, host)
+	if err != nil {
+		return "", req.SessionID, err
+	}
+	if req.SessionID == "" {
+		return startDesktopThread(ctx, host, req, prompt)
+	}
+	return continueDesktopThread(ctx, host, req, prompt)
 }
 
-func startDesktopThread(ctx context.Context, req providers.BuildRequest, prompt string) (string, string, error) {
-	client, err := startAppServer(ctx)
-	if err != nil {
-		return "", "", err
-	}
-	defer client.Close()
-	if err := client.initialize(ctx); err != nil {
-		return "", "", err
-	}
-	threadID, err := client.startThread(ctx, req)
-	if err != nil {
-		return "", "", err
-	}
-	text, err := client.startTurn(ctx, req, threadID, prompt)
+func startDesktopThread(ctx context.Context, host desktopHost, req providers.BuildRequest, prompt string) (string, string, error) {
+	threadID, err := createDesktopThread(ctx, host, req, prompt)
 	if err != nil {
 		return "", threadID, err
 	}
-	focusDesktopThread(threadID)
-	return text, threadID, nil
+	req.SessionID = threadID
+	lease, err := acquireDesktopSession(ctx, host, threadID)
+	if err != nil {
+		return "", threadID, err
+	}
+	defer lease.Close()
+	return deliverDesktopMessage(ctx, host, req, "", nil, prompt, lease)
 }
 
-func continueDesktopThread(ctx context.Context, req providers.BuildRequest, prompt string) (string, string, error) {
+// Naming persists the empty thread before its temporary backend releases it.
+func createDesktopThread(ctx context.Context, host desktopHost, req providers.BuildRequest, prompt string) (string, error) {
+	client, err := startAppServer(ctx, host)
+	if err != nil {
+		return "", err
+	}
+	defer client.Close()
+	if err := client.initialize(ctx); err != nil {
+		return "", err
+	}
+	threadID, err := client.startThread(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	if _, err := client.call(ctx, "thread/name/set", map[string]any{"threadId": threadID, "name": desktopThreadTitle(prompt, threadID)}); err != nil {
+		return threadID, err
+	}
+	return threadID, nil
+}
+
+func continueDesktopThread(ctx context.Context, host desktopHost, req providers.BuildRequest, prompt string) (string, string, error) {
+	lease, err := acquireDesktopSession(ctx, host, req.SessionID)
+	if err != nil {
+		return "", req.SessionID, err
+	}
+	defer lease.Close()
 	rollout, err := findRollout(req.SessionID)
+	if errors.Is(err, errRolloutNotFound) {
+		// A persisted empty thread may have been rejected before its first
+		// queue/add. It can be resumed without inventing a prior turn.
+		return deliverDesktopMessage(ctx, host, req, "", nil, prompt, lease)
+	}
 	if err != nil {
 		return "", req.SessionID, err
 	}
@@ -94,92 +138,104 @@ func continueDesktopThread(ctx context.Context, req providers.BuildRequest, prom
 	if err != nil && !os.IsNotExist(err) {
 		return "", req.SessionID, fmt.Errorf("read codex rollout: %w", err)
 	}
-	if err := queueDesktopMessage(ctx, req, prompt); err != nil {
-		return "", req.SessionID, err
-	}
-	focusDesktopThread(req.SessionID)
-	text, err := waitForQueuedReply(ctx, req, rollout, before, prompt)
+	turnID, err := activeDesktopTurnInRollout(req.SessionID, rollout)
 	if err != nil {
-		return "", req.SessionID, err
+		return "", req.SessionID, fmt.Errorf("read codex rollout history: %w", err)
 	}
-	return text, req.SessionID, nil
+	if turnID != "" {
+		return "", req.SessionID, fmt.Errorf("codex desktop turn %s is still active (app_turn_active); wait or interrupt it in the same Desktop instance before resuming session %s", turnID, req.SessionID)
+	}
+	return deliverDesktopMessage(ctx, host, req, rollout, before, prompt, lease)
 }
 
-func queueDesktopMessage(ctx context.Context, req providers.BuildRequest, prompt string) error {
-	args := []string{"codex", "queue", "--thread", req.SessionID, "--message", prompt}
-	if cwd := strings.TrimSpace(req.CWD); cwd != "" {
-		args = append(args, "-C", cwd)
+func deliverDesktopMessage(ctx context.Context, host desktopHost, req providers.BuildRequest, rollout string, before []byte, prompt string, lease *desktopLock) (string, string, error) {
+	if err := prepareDesktopMessage(ctx, host, req, prompt, lease); err != nil {
+		return "", req.SessionID, err
 	}
-	if model := strings.TrimSpace(req.Target.Model); model != "" {
-		args = append(args, "--model", model)
+	text, err := waitForQueuedReply(ctx, req, rollout, before, prompt)
+	if err == nil {
+		err = lease.setPending("")
 	}
-	args = append(args, sharedConfigArgs(req)...)
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
-	out, err := cmd.CombinedOutput()
+	return text, req.SessionID, err
+}
+
+func prepareDesktopMessage(ctx context.Context, host desktopHost, req providers.BuildRequest, prompt string, lease *desktopLock) error {
+	lock, err := acquireDesktopLock(ctx, desktopLockKey(host, "prepare"), true)
 	if err != nil {
-		msg := strings.TrimSpace(string(out))
-		if msg == "" {
-			msg = err.Error()
-		}
-		return fmt.Errorf("codex queue: %s", msg)
+		return err
+	}
+	defer lock.Close()
+	if err := openDesktopThread(ctx, host, req.SessionID, false); err != nil {
+		return err
+	}
+	if err := queueDesktopMessage(ctx, host, req, prompt, lease); err != nil {
+		return err
+	}
+	// The wake route resumes queued work on the GUI's own app-server. It does
+	// not navigate, so open the ordinary thread route as well.
+	if err := openDesktopThread(ctx, host, req.SessionID, true); err != nil {
+		return err
+	}
+	if err := openDesktopThread(ctx, host, req.SessionID, false); err != nil {
+		return err
 	}
 	return nil
 }
 
-func sharedConfigArgs(req providers.BuildRequest) []string {
-	var args []string
-	if req.Effort != "" && req.Effort != contract.EffortAuto {
-		args = append(args, "-c", fmt.Sprintf(`model_reasoning_effort="%s"`, req.Effort))
-	}
-	if req.Fast {
-		args = append(args, "-c", `service_tier="priority"`)
-	}
-	return args
-}
-
-type appServer struct {
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout *bufio.Reader
-	nextID int
-}
-
-func startAppServer(ctx context.Context) (*appServer, error) {
-	cmd := exec.CommandContext(ctx, "codex", "app-server")
-	stdin, err := cmd.StdinPipe()
+func queueDesktopMessage(ctx context.Context, host desktopHost, req providers.BuildRequest, prompt string, lease *desktopLock) error {
+	client, err := startAppServer(ctx, host)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	stdout, err := cmd.StdoutPipe()
+	defer client.Close()
+	if err := client.initialize(ctx); err != nil {
+		return err
+	}
+	raw, err := client.call(ctx, "thread/read", map[string]any{"threadId": req.SessionID, "includeTurns": false})
 	if err != nil {
-		return nil, err
+		return err
 	}
-	cmd.Stderr = io.Discard
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start codex app-server: %w", err)
+	var info struct {
+		Thread struct {
+			Name string `json:"name"`
+		} `json:"thread"`
 	}
-	return &appServer{cmd: cmd, stdin: stdin, stdout: bufio.NewReader(stdout), nextID: 1}, nil
-}
-
-func (s *appServer) Close() {
-	_ = s.stdin.Close()
-	done := make(chan struct{})
-	go func() {
-		_ = s.cmd.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		if s.cmd.Process != nil {
-			_ = s.cmd.Process.Kill()
+	if err := json.Unmarshal(raw, &info); err != nil {
+		return fmt.Errorf("read Desktop thread name: %w", err)
+	}
+	if info.Thread.Name == "" {
+		return fmt.Errorf("the Desktop thread has no persisted name; no input was queued")
+	}
+	if err := configureDesktopThread(ctx, host, req, info.Thread.Name); err != nil {
+		return err
+	}
+	if err := client.requireCold(ctx); err != nil {
+		return err
+	}
+	messageID := desktopPromptID(prompt)
+	if messageID == "" {
+		messageID, err = newDesktopMessageID()
+		if err != nil {
+			return err
 		}
 	}
+	if lease != nil {
+		if err := lease.setPending(messageID); err != nil {
+			return err
+		}
+	}
+	if _, err := client.call(ctx, "thread/queue/add", map[string]any{
+		"threadId": req.SessionID, "clientUserMessageId": messageID,
+		"input": []map[string]any{{"type": "text", "text": prompt, "text_elements": []any{}}},
+	}); err != nil {
+		return err
+	}
+	return client.requireCold(ctx)
 }
 
 func (s *appServer) initialize(ctx context.Context) error {
 	_, err := s.call(ctx, "initialize", map[string]any{
-		"clientInfo": map[string]string{"name": "Codex Desktop", "version": "ai-dispatch"},
+		"clientInfo": map[string]string{"name": "ai-dispatch", "version": "ai-dispatch"},
 		"capabilities": map[string]any{
 			"experimentalApi": true,
 		},
@@ -192,7 +248,7 @@ func (s *appServer) initialize(ctx context.Context) error {
 
 func (s *appServer) startThread(ctx context.Context, req providers.BuildRequest) (string, error) {
 	params := map[string]any{
-		"threadSource": "vscode",
+		"threadSource": "user",
 		"historyMode":  "legacy",
 	}
 	if cwd := strings.TrimSpace(req.CWD); cwd != "" {
@@ -203,6 +259,9 @@ func (s *appServer) startThread(ctx context.Context, req providers.BuildRequest)
 	}
 	if req.Fast {
 		params["serviceTier"] = "priority"
+	}
+	if req.Effort != "" && req.Effort != contract.EffortAuto {
+		params["config"] = map[string]any{"model_reasoning_effort": string(req.Effort)}
 	}
 	raw, err := s.call(ctx, "thread/start", params)
 	if err != nil {
@@ -220,55 +279,6 @@ func (s *appServer) startThread(ctx context.Context, req providers.BuildRequest)
 		return "", fmt.Errorf("thread/start returned no thread id")
 	}
 	return parsed.Thread.ID, nil
-}
-
-func (s *appServer) startTurn(ctx context.Context, req providers.BuildRequest, threadID string, prompt string) (string, error) {
-	params := map[string]any{
-		"threadId": threadID,
-		"input": []map[string]string{{
-			"type": "text",
-			"text": prompt,
-		}},
-	}
-	if cwd := strings.TrimSpace(req.CWD); cwd != "" {
-		params["cwd"] = cwd
-	}
-	if model := strings.TrimSpace(req.Target.Model); model != "" {
-		params["model"] = model
-	}
-	if req.Effort != "" && req.Effort != contract.EffortAuto {
-		params["effort"] = string(req.Effort)
-	}
-	if req.Fast {
-		params["serviceTier"] = "priority"
-	}
-	if _, err := s.call(ctx, "turn/start", params); err != nil {
-		return "", err
-	}
-	return s.waitTurn(ctx)
-}
-
-func (s *appServer) waitTurn(ctx context.Context) (string, error) {
-	var text strings.Builder
-	for {
-		msg, err := s.read(ctx)
-		if err != nil {
-			return text.String(), err
-		}
-		if len(msg.ID) > 0 && msg.Method != "" {
-			return text.String(), fmt.Errorf("codex app surface is waiting on %s; approve it in Codex Desktop or retry", msg.Method)
-		}
-		switch msg.Method {
-		case "item/agentMessage/delta":
-			var params struct {
-				Delta string `json:"delta"`
-			}
-			_ = json.Unmarshal(msg.Params, &params)
-			text.WriteString(params.Delta)
-		case "turn/completed":
-			return turnResult(msg.Params, text.String())
-		}
-	}
 }
 
 type rpcMessage struct {
@@ -308,38 +318,21 @@ func (s *appServer) notify(method string, params any) error {
 }
 
 func (s *appServer) write(payload any) error {
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	raw = append(raw, '\n')
-	_, err = s.stdin.Write(raw)
-	return err
+	return s.encoder.Encode(payload)
 }
 
 func (s *appServer) read(ctx context.Context) (rpcMessage, error) {
-	type result struct {
-		line string
-		err  error
+	if err := ctx.Err(); err != nil {
+		return rpcMessage{}, err
 	}
-	ch := make(chan result, 1)
-	go func() {
-		line, err := s.stdout.ReadString('\n')
-		ch <- result{line, err}
-	}()
-	select {
-	case <-ctx.Done():
-		return rpcMessage{}, ctx.Err()
-	case got := <-ch:
-		if got.err != nil {
-			return rpcMessage{}, got.err
+	var message rpcMessage
+	if err := s.decoder.Decode(&message); err != nil {
+		if ctx.Err() != nil {
+			return rpcMessage{}, ctx.Err()
 		}
-		var msg rpcMessage
-		if err := json.Unmarshal([]byte(got.line), &msg); err != nil {
-			return rpcMessage{}, fmt.Errorf("parse app-server message: %w", err)
-		}
-		return msg, nil
+		return rpcMessage{}, fmt.Errorf("read temporary Desktop backend response: %w", err)
 	}
+	return message, nil
 }
 
 func idMatches(raw json.RawMessage, want int) bool {
@@ -368,12 +361,15 @@ func promptText(req providers.BuildRequest) (string, error) {
 	return req.Prompt, nil
 }
 
-func focusDesktopThread(threadID string) {
+func openDesktopThread(ctx context.Context, host desktopHost, threadID string, wake bool) error {
 	if threadID == "" {
-		return
+		return fmt.Errorf("cannot open Codex Desktop without a thread id")
 	}
-	cmd := exec.Command("open", "-a", "ChatGPT", "codex://threads/"+threadID)
-	_ = cmd.Run()
+	path := threadID
+	if wake {
+		path = "wake/" + threadID
+	}
+	return sendDesktopRoute(ctx, host, "codex://threads/"+path)
 }
 
 // appSurfacePickupLimit bounds how long a queued Desktop message may go without
@@ -396,7 +392,17 @@ func waitForQueuedReply(ctx context.Context, req providers.BuildRequest, rollout
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		data, err := readActiveRollout(req.SessionID, rollout)
+		var data []byte
+		var err error
+		if rollout == "" {
+			rollout, err = findRollout(req.SessionID)
+			if errors.Is(err, errRolloutNotFound) {
+				err = nil // metadata-only threads materialize after GUI pickup
+			}
+		}
+		if err == nil && rollout != "" {
+			data, err = readActiveRollout(req.SessionID, rollout)
+		}
 		if err != nil {
 			return "", fmt.Errorf("read codex rollout: %w", err)
 		}
@@ -407,8 +413,11 @@ func waitForQueuedReply(ctx context.Context, req providers.BuildRequest, rollout
 			lastSize = size
 		}
 		scan, err := queuedReply(before, data, prompt)
-		if err != nil || scan.ready {
+		if err != nil {
 			return scan.text, err
+		}
+		if scan.ready {
+			return scan.text, validateDesktopTurnSettings(data, scan.turnID, req)
 		}
 		if idle > 0 && time.Since(lastChange) > idle {
 			if scan.landed && req.ActivityTimeoutSeconds <= 0 {
@@ -439,6 +448,7 @@ func queuedStallError(scan queuedScan, waited, idle time.Duration) error {
 // queuedScan is what one rollout read tells us about the queued prompt.
 type queuedScan struct {
 	text   string // assistant text once the turn finished
+	turnID string // only this prompt's turn can prove execution settings
 	ready  bool   // our turn finished successfully
 	landed bool   // a turn carrying our own stamped prompt showed up
 	other  string // a different stamped prompt landed instead (diagnostic)
@@ -485,10 +495,12 @@ func queuedReply(before, data []byte, prompt string) (queuedScan, error) {
 	if match.turnID == "" {
 		return scan, nil
 	}
+	scan.turnID = match.turnID
 	end, ok := terminalByID(data, match.turnID)
 	if !ok {
 		return scan, nil
 	}
+	scan.text = end.text
 	if end.failed {
 		return scan, fmt.Errorf("codex desktop turn %s: %s", end.status, end.errText)
 	}
@@ -577,108 +589,6 @@ func messageText(content json.RawMessage) string {
 		return text
 	}
 	return ""
-}
-
-func terminalByID(data []byte, turnID string) (turnEnd, bool) {
-	var found turnEnd
-	ok := false
-	for _, end := range terminalTurns(data) {
-		if end.id == turnID {
-			found = end
-			ok = true
-		}
-	}
-	return found, ok
-}
-
-type turnEnd struct {
-	id      string
-	status  string
-	text    string
-	errText string
-	failed  bool
-}
-
-func turnResult(params json.RawMessage, streamed string) (string, error) {
-	var note struct {
-		Turn struct {
-			Status string `json:"status"`
-			Error  *struct {
-				Message string `json:"message"`
-			} `json:"error"`
-		} `json:"turn"`
-	}
-	_ = json.Unmarshal(params, &note)
-	switch note.Turn.Status {
-	case "failed", "interrupted":
-		msg := note.Turn.Status
-		if note.Turn.Error != nil && note.Turn.Error.Message != "" {
-			msg = note.Turn.Error.Message
-		}
-		return "", fmt.Errorf("codex app turn %s: %s", note.Turn.Status, msg)
-	case "completed", "":
-		if strings.TrimSpace(streamed) == "" {
-			return "", fmt.Errorf("codex app turn completed without an assistant message")
-		}
-		return streamed, nil
-	default:
-		return "", fmt.Errorf("codex app turn ended with status %s", note.Turn.Status)
-	}
-}
-
-func turnEndedAfter(before, data []byte) (turnEnd, bool) {
-	seen := map[string]bool{}
-	for _, end := range terminalTurns(before) {
-		if end.id != "" {
-			seen[end.id] = true
-		}
-	}
-	var fresh []turnEnd
-	for _, end := range terminalTurns(data) {
-		if end.id == "" || seen[end.id] {
-			continue
-		}
-		fresh = append(fresh, end)
-	}
-	if len(fresh) == 0 {
-		return turnEnd{}, false
-	}
-	return fresh[len(fresh)-1], true
-}
-
-func terminalTurns(data []byte) []turnEnd {
-	var ends []turnEnd
-	for _, line := range bytes.Split(data, []byte("\n")) {
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 || line[0] != '{' {
-			continue
-		}
-		var event struct {
-			Payload struct {
-				Type             string `json:"type"`
-				Status           string `json:"status"`
-				TurnID           string `json:"turn_id"`
-				LastAgentMessage string `json:"last_agent_message"`
-				Message          string `json:"message"`
-			} `json:"payload"`
-		}
-		if err := json.Unmarshal(line, &event); err != nil {
-			continue
-		}
-		kind := event.Payload.Type
-		if kind == "" {
-			kind = event.Payload.Status
-		}
-		switch kind {
-		case "task_complete":
-			ends = append(ends, turnEnd{id: event.Payload.TurnID, status: "completed", text: event.Payload.LastAgentMessage})
-		case "task_failed", "turn_failed", "error":
-			ends = append(ends, turnEnd{id: event.Payload.TurnID, status: "failed", failed: true, errText: firstNonEmpty(event.Payload.Message, "failed")})
-		case "task_interrupted", "turn_interrupted":
-			ends = append(ends, turnEnd{id: event.Payload.TurnID, status: "interrupted", failed: true, errText: firstNonEmpty(event.Payload.Message, "interrupted")})
-		}
-	}
-	return ends
 }
 
 func firstNonEmpty(values ...string) string {

@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 )
 
 func TestCLISurfaceStaysOnExec(t *testing.T) {
+	fakeCodexBinary(t)
 	target := routing.DispatchTarget{Requested: "codex", Provider: "codex", Model: "gpt-5.5"}
 	for _, surface := range []string{"", "cli"} {
 		run, handled, err := Provider{}.RunDirect(context.Background(), providers.BuildRequest{
@@ -46,38 +48,68 @@ func TestParseAppEnvelopeKeepsSessionOnFailure(t *testing.T) {
 	}
 }
 
-func TestTurnEndedAfterIgnoresPreviousAnswer(t *testing.T) {
-	old := []byte(`{"type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"OLD"}}` + "\n")
-	samePrompt := append([]byte{}, old...)
-	samePrompt = append(samePrompt, []byte(`{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"OLD"}]}}`+"\n")...)
-	if _, ok := turnEndedAfter(old, samePrompt); ok {
-		t.Fatal("previous assistant text must not finish a new follow-up")
-	}
-	added := append([]byte{}, old...)
-	added = append(added, []byte(`{"type":"event_msg","payload":{"type":"agent_message","message":"我会检查仓库"}}`+"\n")...)
-	if _, ok := turnEndedAfter(old, added); ok {
-		t.Fatal("commentary must not finish the turn")
-	}
-	added = append(added, []byte(`{"type":"event_msg","payload":{"type":"task_complete","turn_id":"t2","last_agent_message":"NEW \"line\""}}`+"\n")...)
-	end, ok := turnEndedAfter(old, added)
-	if !ok || end.failed || end.text != `NEW "line"` {
-		t.Fatalf("end=%+v ok=%v", end, ok)
+func TestQueuedReplyRejectsFailedTerminalKinds(t *testing.T) {
+	for _, kind := range []string{"turn_aborted", "task_interrupted", "turn_interrupted", "cancelled", "task_failed"} {
+		t.Run(kind, func(t *testing.T) {
+			data := userLine("msg-current", "current", stamped("PROMPT")) + terminalLine(kind, "current", "partial output", "interrupted")
+			if scan, err := queuedReply(nil, []byte(data), stamped("PROMPT")); err == nil || scan.ready {
+				t.Fatalf("failed terminal accepted: scan=%+v err=%v", scan, err)
+			}
+		})
 	}
 }
 
-func TestTurnEndedAfterReportsFailure(t *testing.T) {
-	before := []byte{}
-	data := []byte(`{"type":"event_msg","payload":{"type":"task_failed","turn_id":"t9","message":"interrupted by user"}}` + "\n")
-	end, ok := turnEndedAfter(before, data)
-	if !ok || !end.failed || end.errText != "interrupted by user" {
-		t.Fatalf("end=%+v ok=%v", end, ok)
+func TestQueuedReplyAbortCannotBeOverriddenByReplayedComplete(t *testing.T) {
+	prompt := stamped("PROMPT")
+	data := userLine("new", "current", prompt) +
+		`{"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"current","reason":"interrupted"}}` + "\n" +
+		terminalLine("task_complete", "old", "OLD", "") + terminalLine("task_complete", "current", "REPLAYED", "")
+	scan, err := queuedReply(nil, []byte(data), prompt)
+	if err == nil || scan.ready || !strings.Contains(err.Error(), "interrupted") {
+		t.Fatalf("scan=%+v err=%v", scan, err)
 	}
 }
 
-func TestTurnResultRejectsFailedStatus(t *testing.T) {
-	_, err := turnResult([]byte(`{"turn":{"id":"t","status":"failed","items":[],"error":{"message":"boom"}}}`), "partial")
-	if err == nil || !strings.Contains(err.Error(), "boom") {
-		t.Fatalf("err=%v", err)
+func TestParseRejectsZeroExitWithAbortedOrUnconfirmedTurn(t *testing.T) {
+	for _, raw := range []string{
+		`{"surface":"app","session_id":"thread-1","text":"partial","state":"failed","error":"interrupted"}`,
+		`{"surface":"app","session_id":"thread-1","text":"partial","state":"queued"}`,
+		`{"surface":"app","session_id":"thread-1","text":"partial"}`,
+		`{"thread_id":"thread-1","item":{"type":"agent_message","text":"partial"}}` + "\n" + `{"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"current","reason":"interrupted"}}`,
+	} {
+		result := Provider{}.Parse(runtime.RunResult{ExitCode: 0, Stdout: []byte(raw)}, providers.BuildRequest{})
+		if result.OK || result.Status == contract.StatusSuccess || result.SessionID != "thread-1" || result.Stderr == "" {
+			t.Fatalf("raw=%s result=%+v", raw, result)
+		}
+	}
+	result := Provider{}.Parse(runtime.RunResult{Stdout: []byte(`{"surface":"app","session_id":"thread-1","text":"answer","state":"completed"}`)}, providers.BuildRequest{})
+	if !result.OK {
+		t.Fatalf("confirmed completion rejected: %+v", result)
+	}
+}
+
+func TestRolloutSelectionKeepsExactThreadAndAnchor(t *testing.T) {
+	if isThreadRollout("rollout-time-otherthread-42.jsonl", "thread-42") {
+		t.Fatal("thread ID substring accepted")
+	}
+	if !isThreadRollout("rollout-time-thread-42_segment.jsonl", "thread-42") {
+		t.Fatal("thread continuation rejected")
+	}
+	paths := rolloutSpan("missing-anchor", []rolloutSeg{{path: "unrelated", id: "other", name: "newest"}})
+	if len(paths) != 1 || paths[0] != "missing-anchor" {
+		t.Fatalf("switched rollout branch: %v", paths)
+	}
+}
+
+func TestCodexFailureRemainsBoundToCurrentTurn(t *testing.T) {
+	stream := `{"type":"event_msg","payload":{"type":"task_started","turn_id":"current"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"old","reason":"interrupted"}}` + "\n"
+	if reason := codexTurnFailure(stream); reason != "" {
+		t.Fatalf("old abort contaminated new turn: %s", reason)
+	}
+	stream += `{"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"current","reason":"interrupted"}}` + "\n" + terminalLine("task_complete", "old", "OLD", "")
+	if reason := codexTurnFailure(stream); !strings.Contains(reason, "interrupted") {
+		t.Fatalf("abort lost to old complete: %s", reason)
 	}
 }
 
@@ -331,6 +363,154 @@ func TestTerminalOnNextSegmentStillMatchesTheQueuedTurn(t *testing.T) {
 	text, err := waitForQueuedReply(ctx, providers.BuildRequest{SessionID: thread}, live, before, "PROMPT")
 	if err != nil || text != "ANSWER" {
 		t.Fatalf("text=%q err=%v", text, err)
+	}
+}
+
+func TestDesktopTurnStateFollowsOnlyAnchorAncestors(t *testing.T) {
+	const thread = "thread-42"
+	started := `{"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-current"}}` + "\n"
+	user := userLine("msg-current", "turn-current", stamped("PROMPT"))
+	for _, tc := range []struct {
+		name       string
+		parent     string
+		child      string
+		sibling    string
+		wantActive string
+	}{
+		{
+			name:    "completed parent with replayed child user",
+			parent:  started + user + terminalLine("task_complete", "turn-current", "DONE", ""),
+			child:   user,
+			sibling: started + user,
+		},
+		{
+			name:       "active parent with metadata-only child",
+			parent:     started + user,
+			sibling:    terminalLine("task_complete", "turn-current", "OTHER BRANCH", ""),
+			wantActive: "turn-current",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("CODEX_HOME", home)
+			writeRollout(t, home, "rollout-2026-11-06T10-00-00-"+thread+".jsonl", sessionMetaLine("")+tc.parent)
+			writeRollout(t, home, "rollout-2026-11-06T11-00-00-"+thread+"_middle.jsonl", sessionMetaLine(thread))
+			anchor := writeRollout(t, home, "rollout-2026-11-06T12-00-00-"+thread+"_leaf.jsonl", sessionMetaLine("middle")+tc.child)
+			writeRollout(t, home, "rollout-2026-11-06T13-00-00-"+thread+"_sibling.jsonl", sessionMetaLine(thread)+tc.sibling)
+			active, err := activeDesktopTurnInRollout(thread, anchor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if active != tc.wantActive {
+				t.Fatalf("active=%q want=%q", active, tc.wantActive)
+			}
+			// Ancestral user messages must not expand the queued before snapshot.
+			before, err := os.ReadFile(anchor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data := append([]byte(nil), before...)
+			data = append(data, []byte(terminalLine("task_complete", "turn-current", "OLD", "")+userLine("msg-next", "turn-next", stamped("NEXT")))...)
+			if scan, err := queuedReply(before, data, stamped("NEXT")); err != nil || !scan.landed || scan.ready {
+				t.Fatalf("old completion finished queued follow-up: scan=%+v err=%v", scan, err)
+			}
+		})
+	}
+}
+
+func TestDesktopResumeAllowsCompletedAncestorWithReplayedUser(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	bin := t.TempDir()
+	t.Setenv("PATH", bin)
+	if err := os.WriteFile(filepath.Join(bin, "open"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const thread = "thread-42"
+	user := userLine("msg-done", "done-parent", stamped("OLD"))
+	writeRollout(t, home, "rollout-2026-11-06T10-00-00-"+thread+".jsonl", sessionMetaLine("")+user+terminalLine("task_complete", "done-parent", "DONE", ""))
+	writeRollout(t, home, "rollout-2026-11-06T11-00-00-"+thread+"_leaf.jsonl", sessionMetaLine(thread)+user)
+	_, sessionID, err := continueDesktopThread(context.Background(), desktopHost{binary: "codex"}, providers.BuildRequest{SessionID: thread}, stamped("NEXT"))
+	// This synthetic host has no bound PID. Delivery must reach that route
+	// boundary rather than rejecting a completed, replayed ancestor turn.
+	if err == nil || !strings.Contains(err.Error(), "open codex desktop thread") || sessionID != thread {
+		t.Fatalf("completed ancestor blocked resume: session=%q err=%v", sessionID, err)
+	}
+}
+
+func TestDesktopResumeRejectsActiveAncestorBeforeQueue(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	t.Setenv("PATH", t.TempDir())
+	const thread = "thread-42"
+	writeRollout(t, home, "rollout-2026-11-06T10-00-00-"+thread+".jsonl", sessionMetaLine("")+`{"type":"event_msg","payload":{"type":"task_started","turn_id":"active-parent"}}`+"\n")
+	writeRollout(t, home, "rollout-2026-11-06T11-00-00-"+thread+"_leaf.jsonl", sessionMetaLine(thread))
+	_, sessionID, err := continueDesktopThread(context.Background(), desktopHost{binary: "codex"}, providers.BuildRequest{SessionID: thread}, stamped("NEXT"))
+	if err == nil || !strings.Contains(err.Error(), "app_turn_active") || sessionID != thread {
+		t.Fatalf("session=%q err=%v", sessionID, err)
+	}
+}
+
+func TestRolloutHistoryRejectsBrokenAncestorChain(t *testing.T) {
+	for _, parent := range []string{"missing", "leaf"} {
+		t.Run(parent, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("CODEX_HOME", home)
+			anchor := writeRollout(t, home, "rollout-2026-11-06T10-00-00-thread-42_leaf.jsonl", sessionMetaLine(parent))
+			if _, err := activeDesktopTurnInRollout("thread-42", anchor); err == nil {
+				t.Fatal("incomplete or cyclic ancestry must not permit queueing")
+			}
+		})
+	}
+}
+
+func TestCreateDesktopThreadReleasesMetadataOwnerWithoutExecutingTurn(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	host, closed, _ := desktopBackendFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	threadID, err := createDesktopThread(ctx, host, providers.BuildRequest{}, "Metadata-only handoff")
+	if err != nil || threadID != "thread-42" {
+		t.Fatalf("thread=%q err=%v", threadID, err)
+	}
+	if _, err := os.Stat(closed); err != nil {
+		t.Fatalf("metadata owner was not released before returning: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(closed), "unexpected-turn")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("metadata-only creation unexpectedly executed a turn: %v", err)
+	}
+}
+
+func TestWaitForQueuedReplyPicksUpFirstRolloutAfterGUIStarts(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	dir := filepath.Join(home, "sessions")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prompt := stamped("NEW TASK")
+	body := sessionMetaLine("") + terminalLine("task_complete", "old", "STALE", "") + userLine("msg-other", "other", stamped("OTHER TASK")) + terminalLine("task_complete", "other", "FOREIGN", "") + userLine("msg-new", "current", prompt) + terminalLine("task_complete", "current", "GUI ANSWER", "")
+	written := make(chan error, 1)
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		written <- os.WriteFile(filepath.Join(dir, "rollout-time-thread-42.jsonl"), []byte(body), 0o644)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	text, err := waitForQueuedReply(ctx, providers.BuildRequest{SessionID: "thread-42", ActivityTimeoutSeconds: 1}, "", nil, prompt)
+	if writeErr := <-written; writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	if err != nil || text != "GUI ANSWER" {
+		t.Fatalf("text=%q err=%v", text, err)
+	}
+}
+
+func TestWaitForFirstRolloutKeepsPickupLimit(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	_, err := waitForQueuedReply(context.Background(), providers.BuildRequest{SessionID: "thread-42", ActivityTimeoutSeconds: 1}, "", nil, stamped("PROMPT"))
+	if err == nil || !strings.Contains(err.Error(), "app_not_picked_up") {
+		t.Fatalf("missing first rollout should exhaust pickup, not succeed or fail a read: %v", err)
 	}
 }
 

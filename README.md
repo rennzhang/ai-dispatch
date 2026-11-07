@@ -2,215 +2,134 @@
 
 让当前 AI Agent，用一套命令调用本机不同的 AI coding CLI。
 
-既可以在终端和脚本里调用，也可以作为 Claude Code / Codex 的 skill，让当前 Agent 用自然语言派发任务，例如：“用 ai-dispatch 找 Claude review 当前 diff”。
+既可以在终端和脚本里调用，也可以作为 Claude Code / Codex 的 skill 使用。dispatch 负责入口、模型、参数和结果格式的适配；模型实际完成了什么，仍需按任务验收。
 
-## 能做什么
+## 默认与显式选择
 
-- **统一调用**：用同一套命令派发任务，ai-dispatch 负责适配各家 CLI 的参数和结果格式。
-- **模型路由**：给常用模型配置短名和候选顺序；调用失败时，按路由规则尝试后续候选。
-- **继续会话**：上一轮返回可继续的 session 后，可以接着追问、补充要求或继续修改。
-- **查看进度与结果**：提供流式进度、JSON 结果和本地调用记录，方便 Agent、脚本和自动化流程接入。
+默认入口是 **OMP**，默认模型是 **Sol（`gpt-6.1-sol`）**。默认配置不替你安装 CLI 或登录账号；先发现本机入口和模型：
 
-## 适用场景
+```bash
+ai-dispatch init
+ai-dispatch providers scan --dry-run --format json
+ai-dispatch providers scan --format json
+```
 
-| 场景 | 怎么用 |
-| --- | --- |
-| 独立 review | 让另一个模型检查当前 diff、找遗漏和风险 |
-| 实现与复查 | 让一个模型完成修复，再让另一个模型复查并核对测试结果 |
-| 排障与方案分析 | 把日志、代码或方案交给另一个模型，补充不同视角 |
-| 多模型对照 | 让当前 Agent 分别派发同一个问题，再汇总各模型的共识与分歧 |
-| 脚本与自动化 | 通过 CLI 派发任务、消费 JSON 结果，并按需继续会话 |
+`--dry-run` 只预览，不写配置。普通扫描更新同一个 `~/.ai-dispatch/config.json`，不发送模型生成请求。
 
-## 当前支持的 provider
+```bash
+# 没有指定 target/model：使用 config defaults
+ai-dispatch send --prompt-file /tmp/task.md --cwd "$PWD" --json-result
 
-ai-dispatch 当前内置支持七类本机 CLI provider：
+# 只指定模型：使用默认入口，不自动换 provider
+ai-dispatch send sol "检查当前 diff，不修改文件" --cwd "$PWD" --json-result
 
-| Provider | 底层 CLI | 常见用途 |
+# 明确指定 Codex App 与模型
+ai-dispatch send codex "检查当前 diff，不修改文件" \
+  --surface app --model gpt-6.1-sol --cwd "$PWD" --json-result
+
+# 明确指定 Grok Build 与原生模型 ID
+ai-dispatch send grok "检查当前 diff，不修改文件" \
+  --model grok-4.7 --cwd "$PWD" --json-result
+```
+
+显式 provider 优先，模型别名不能占用 `omp`、`codex`、`grok` 等入口名称。`send codex` 不带模型时使用 Codex CLI 自己的模型默认值；不会把全局默认 Sol 强加给显式入口。
+
+显式 `provider + --model` 可以传该入口的原生 ID，即使扫描目录尚未收录。未收录只表示未验证，不作为调用白名单。已知逻辑模型若没有所选入口/渠道的对应关系，会明确报错，不猜 ID、不自动换入口。每次请求只执行选中的一条路径，失败直接返回，不遍历候选或自动 fallback。
+
+## 支持的入口
+
+| Provider | 本机入口 | 渠道 |
 | --- | --- | --- |
-| Codex | `codex` | 实现、修复、仓库内工程推进 |
-| Claude | `claude` | 高风险 review、判断、复杂推理 |
-| OpenCode | `opencode` | OpenRouter / OpenAI / Google 等模型 |
-| Antigravity/Gemini | `agy` | Gemini / Antigravity 视角 |
-| Grok | `grok` | Grok Build CLI，快速实现、分析、并行探索 |
-| Cursor | `cursor-agent` | Cursor 订阅内 Claude/GPT/Gemini/Kimi/Composer 模型 |
-| OMP (oh-my-pi) | `omp` | DeepSeek 等通过 OMP 配置的模型（如 `opencode-go/deepseek-flash`） |
+| OMP | `omp` | CLI |
+| Codex | `codex`；App 使用其 bundled CLI | CLI、App |
+| Grok | `grok`（Grok Build） | CLI |
+| Claude | `claude` | CLI |
+| OpenCode | `opencode` | CLI |
+| Cursor | `cursor-agent` | CLI |
+| Antigravity/Gemini | `agy`（`gemini` 是入口别名） | CLI |
 
-这里的 provider 指被调用的本机 CLI。使用前需要安装相应 CLI，并完成登录或 API 配置；具体可用模型和额度由对应账号与配置决定。Gemini 通过 Antigravity（`agy`）接入。
+扫描检查支持范围内的本机入口，写入实际发现的 executable 和 surfaces；未安装项只出现在扫描报告。可以列模型的入口继续发现模型；不支持列举或读取失败会明确报告，不能当成“没有模型”。扫描不会安装 CLI、修改其配置或替你登录。发现目录也不证明账号额度和每次请求一定可用。
 
-想接入更多 CLI provider 或参与贡献，见 [issue #1](https://github.com/rennzhang/ai-dispatch/issues/1)。
+## 一个配置文件
 
-## 使用示例
+`~/.ai-dispatch/config.json` 使用 v2 对象结构：
 
-### 终端调用
+- `defaults`：用户没指定时怎么选。
+- `providers`：本机已发现的入口及绝对 executable 路径。
+- `models`：逻辑模型、别名，以及 `targets.<provider>.<surface>` 对应的原生模型 ID 和能力。
 
-安装后，在项目目录里调用本机已登录的 Codex CLI，检查当前变更：
+同一个 Sol 可以同时对应 OMP、Codex CLI 和 Codex App。Magpie 仅在经过它的 OMP selector 中出现，不是模型目录的统一依赖。扫描生成的 target 标记为 `origin: "scan"`，手工维护的标记为 `origin: "manual"`；扫描保留手工条目、别名和 defaults。
 
-```bash
-ai-dispatch send codex "检查当前 diff，指出风险和遗漏，不修改文件" \
-  --cwd "$PWD" --json-result
-```
+配置中不保存 CLI 版本号。顶层 `version: 2` 是配置结构版本，用于明确迁移，与 provider 版本无关。详细示例见[配置参考](skills/ai-dispatch/references/config.md)。
 
-### 直接复制这些提示词
-
-在安装了 ai-dispatch skill 的 Claude Code / Codex 中，可以直接用自然语言派发。涉及模型短名时，先按[模型和偏好](#模型和偏好)配置可用模型，再将示例里的模型名替换成自己的选择。
-
-让 Claude Opus 做发版前 review：
-
-```text
-请用 ai-dispatch 调 Claude Opus 对当前 diff 做交付级 review。
-重点看 blocker/high risk、过度设计、漂移、兼容层和发布风险。
-只输出 findings first，最后给是否可以发版。
-```
-
-让 Codex 帮你实现：
-
-```text
-请用 ai-dispatch 调 Codex 实现这个修复。
-保持最小改动，完成后跑测试，把关键 diff 和验证结果带回来。
-```
-
-让多个模型一起看：
-
-```text
-请用 ai-dispatch 找 opus、glm、gemini-pro、kimi 各自独立 review 当前变更。
-最后汇总共识、冲突点和必须立刻修的项。
-```
-
-### 继续追问
-
-如果上一轮外部模型返回了可继续的会话，直接让当前 Agent 追问它：
-
-```text
-继续追问刚才那个 Claude reviewer：
-它提到的 P1 里哪些必须现在修，哪些可以发版后处理？
-```
-
-你不需要自己管理 session id；Agent 会从 ai-dispatch 的返回结果里拿。
-
-### Codex Desktop
-
-Codex 默认仍走 `codex exec`。只有明确要在 Codex Desktop 里看这条对话时，才加 `--surface app`：
+已有 v1 候选数组配置先预览迁移：
 
 ```bash
-ai-dispatch send codex "实现这个修复，完成后说明改了什么" --surface app \
-  --cwd "$PWD" --json-result --task-name desktop-fix
+ai-dispatch config migrate --dry-run --format json
+ai-dispatch config migrate --apply --format json
+ai-dispatch providers scan --dry-run --format json
 ```
 
-继续这条 Desktop 线程时必须再写 `--surface app`。渠道不会记住；不写会用 CLI 去抢同一条会话。
+迁移会报告取消候选顺序、保留映射和冲突。冲突不写入；应用时先保留原文件备份。新 runtime 不在调用时悄悄兼容 v1，也不会在迁移时顺便升级二进制。
+
+`~/.ai-dispatch/preferences.md` 仍可保存用户的场景偏好，供 Agent 阅读；它不承载可执行路由，不覆盖用户明确要求或 config defaults。不要从偏好文档反推模型全集。
+
+## Codex App
+
+新建 App 对话显式写 `codex --surface app`。恢复由 dispatch 记录的会话时，provider、surface 和模型从原会话继承：
 
 ```bash
-ai-dispatch resume --session-id <id> --surface app "只看这次改动" \
-  --json-result --task-name desktop-fix-r2
+ai-dispatch resume --session-id <id> "只检查这次改动" --json-result
 ```
 
-`--model`、`--effort`、`--fast` 两条渠道一样。app 回合不受 `--timeout` 限制，取消仍会停下。其他 provider 不接受 `--surface app`。
+显式要求换到另一渠道会报错，不会用 CLI 去接管 App 线程。没有 dispatch 历史的 session 需要明确入口/渠道，避免猜测。
 
-### 派发标记
+App 需要 macOS、已安装客户端和辅助功能授权。投递绑定目标 App 的 bundle/PID，必要时打开该安装。显式 `AI_DISPATCH_CODEX_APP_PID` 可指定目标；默认排除带 `--user-data-dir` 的自定义 profile 实例，再按进程祖先、唯一 active 或唯一 GUI 窗口选择，仍有歧义时拒绝。URL 使用定向 PID 的 GURL AppleEvent，不能用 `open -a` 在同 bundle 的多个进程间猜测。准备阶段只操作 PID 绑定的精确线程窗口，通过原生 AX 菜单验证模型/effort/速度；自定义强度控件使用定向该 PID 的单步箭头并逐次回读，边界取菜单实际档数。**App 后端模型目录不等于 GUI 当前可选预设**；扫描不切换 GUI，也不保证该组合可以入队。
 
-每次实际发出的正文第一行是 `[ai-dispatch]`，空一行后再接原文。`send`、`resume`、stdin、`--prompt-file`、CLI 和 Desktop 都一样。
+临时后端只创建线程元数据或向冷队列写消息，退出后由原 GUI 执行；不使用独立 daemon 或 CLI 模型回合做 fallback。实例准备阶段串行，同 session 防重复投递；模型等待期允许其他线程准备。正文首行保持 `[ai-dispatch]`，App 另带唯一 `dispatch-id` 关联本次回执。
 
-这是来源标记，用来区分人自己打的消息和 ai-dispatch 派发出去的消息。它不是给模型的指令。
+只有本次匹配 turn 的完成终态及 `turn_context` 验证通过才能成功。排队成功、部分输出、旧回合完成事件均不能替代。`app_turn_active` 或 `app_delivery_pending` 表示先检查原线程，不能靠再次发送制造进展。
+
+取消只结束 dispatch 等待，**不保证 GUI 拥有的回合停止**；结果保留 session 和警告。App 回合不受 CLI 的 `--timeout` 限制；支持显式 `--activity-timeout`，未指定时保留投递拾取保护。
+
+## Effort、Fast 与结果
+
+`--effort auto|none|minimal|low|medium|high|xhigh|max` 控制推理意图。精确档位由本次选中的 `targets.<provider>.<surface>.efforts` 声明；缺失或不支持时保持 auto，并返回 `effort_fallback_reason`。能力不能跨入口照搬，也不静默降到相邻档。
+
+`fast: true` 只允许显式 `--fast` 生效，不会默认开启。未声明或不支持时标准速度执行并返回 `fast_fallback_reason`。能力回退不触发第二次模型调用。
+
+```bash
+ai-dispatch models resolve sol --format json
+ai-dispatch models resolve codex --surface app --model sol --format json
+ai-dispatch version --format json
+```
+
+结果以 JSON 的 `ok`、`status`、`provider_used`、`model_used`、`surface`、`session_id`、`failure_class` 和实际产物为准。默认不贴调用卡片；配置 `user_facing_summary: true` 或单次 `--wrap-up` 可开启。模型回合成功不等于业务验收完成。
 
 ## 安装
 
-终端使用，安装 CLI（需要 Node.js 18+）：
-
 ```bash
 npm install -g ai-dispatch
-ai-dispatch doctor
 ```
 
-<details>
-<summary>Agent skill、Homebrew 和其他安装方式</summary>
-
-在 Claude Code / Codex 中用自然语言派发时，按当前使用的 Agent 安装对应 skill：
+Agent skill：
 
 ```bash
-# Claude Code
 npx skills add rennzhang/ai-dispatch -g --agent claude-code
-
-# Codex
 npx skills add rennzhang/ai-dispatch -g --agent codex
 ```
 
-`npx skills add` 只安装 skill；首次调用时会按需下载对应版本的 CLI。
+skill wrapper 按 `VERSION` 使用或下载经校验的 release binary。v0.11.0 使用 v2 配置；升级已有 v1 配置时先按上文执行 `config migrate`，安装器保留用户配置。检查实际构建用 `version --format json` 的 `version`、`revision`、`modified`。
 
-- [Homebrew、npx、无 Node.js 或同时安装 CLI 与 skill](docs/technical.md#安装形态)
-- [检查安装与实际运行的版本](docs/technical.md#检查安装)
+其他安装方式见[技术篇](docs/technical.md#安装形态)。
 
-</details>
+## 安全与文档
 
-## 模型和偏好
+底层 CLI 可能读写文件、执行命令。OMP 默认自动批准（`omp.approval=always`），Grok 默认 `grok.approval=always`；需要保留工具批准边界时显式传 `--provider-opt omp.approval=default` 或 `grok.approval=default`。Cursor 默认只信任工作区，不自动批准工具操作。
 
-短名必须写进 ~/.ai-dispatch/config.json 的 models。没写进去的 kimi / qwen / gpt5.5 这类词会直接失败。
-
-你也可以直接说 provider 名：`codex`、`claude`、`cursor`、`grok`、`opencode`、`omp`、`antigravity`（或 `gemini`）。
-
-ai-dispatch 有两个用户态文件：
-
-- `~/.ai-dispatch/config.json` 的 `models` 字段：你这台机器已添加的模型短名和候选池。
-- `~/.ai-dispatch/config.json` 的 `user_facing_summary`：是否在回复里贴调用卡片，默认关闭。设为 `true` 开启。
-- `~/.ai-dispatch/preferences.md`：你喜欢在什么场景用哪些模型。
-
-短名不会开箱即用。先把确认能用的模型写进 config.json models，再在 preferences.md 里写场景偏好。
-
-更新可用模型池时，可以直接说：
-
-```text
-请帮我更新 ai-dispatch 的可用模型池。
-把我确认能用的模型短名写进 ~/.ai-dispatch/config.json 的 models 字段：
-<short-name> 走 <provider>/<model-id>，必要时再加一个 fallback 候选。
-```
-
-更新场景偏好时，可以直接说：
-
-```text
-请帮我更新 ai-dispatch 的模型偏好。
-review 场景优先用 <review-target>；代码实现优先用 <coding-target>。
-写进 ~/.ai-dispatch/preferences.md，保持简短清楚。
-```
-
-## Reasoning effort
-
-跨 provider 可用顶层 `--effort` 控制推理档位：
-
-```bash
-ai-dispatch send gpt5.6 "implement the fix" --effort xhigh --json-result
-```
-
-Codex 短名（gpt5.6-sol 等）需要写进 config.json。裸 send codex 使用 Codex CLI 自己的默认模型。
-
-合法值：`auto | none | minimal | low | medium | high | xhigh | max`。省略或 `auto` 表示不覆盖各 CLI 默认。精确档位只在该候选 config `efforts` 声明列表内传递；未声明或不在列表内回到 `auto`，结果里会带 `requested_effort` / `applied_effort` / `effort_fallback_reason`，不会静默降到相邻档。详见 [Reasoning Effort 设计](docs/reasoning-effort-design.md)。
-
-## Fast mode
-
-所有 provider 统一接受顶层 `--fast`：
-
-```bash
-ai-dispatch send gpt5.6-luna "implement the fix" --fast --json-result
-```
-
-- **支持范围**：当前 Codex GPT-5.5/5.6 target 会应用 priority service tier。
-- **未生效时**：其他 provider 暂未确认有等价能力时仍按标准速度执行一次，并在结果里明确返回 `requested_fast=true`、`applied_fast=false` 和 `fast_fallback_reason`；不会静默声称已加速，也不会因此设置 `degraded` 或写入通用 `warnings`。
-- **查询方式**：切换前可用 `ai-dispatch models resolve <target> --format json` 读顶层 `fast`。
-
-## 安全
-
-ai-dispatch 调的是你本机已安装的 AI CLI。某些 provider 可以读写文件或执行命令；只在你愿意交给这些 CLI 的工作区里使用。
-
-Grok provider 为了非交互式执行默认使用 `grok.approval=always`。处理不可信 prompt 或不希望自动批准工具/文件操作时，传 `--provider-opt grok.approval=default`。
-
-Cursor provider 默认只信任工作区（`--trust`），不自动批准工具/文件操作；需要全自动执行时显式传 `--provider-opt cursor.approval=always`。Cursor 模型 ID 自带推理档位后缀（如 `claude-fable-5-thinking-high`），不接收 `--effort` 精确档位；需要其它档位时换用带对应后缀的短名。
-
-OMP provider 默认 `--auto-approve`（`omp.approval=always`）。处理不可信 prompt 或不希望自动批准工具/文件操作时，传 `--provider-opt omp.approval=default`。`--effort` 映射到 omp `--thinking`（`none` → `off`）；能力仍以 config `efforts` 声明为准。
-
-## 技术文档
-
-日常使用先看本 README。需要底层细节时再看：
-
-- [技术篇](docs/technical.md)：CLI、JSON 结果、run history、provider scan、failure_class、发布。
-- [架构设计](DESIGN.md)：包边界、请求流程、状态目录。
-- [Changelog](CHANGELOG.md)：公开版本变更记录。
-- [Provider Acceptance](docs/provider-acceptance.md)：新增或回归 provider 的真实验收 harness。
-- [配置参考](skills/ai-dispatch/references/config.md)：`config.json` 字段和模型路由。
-- [偏好格式](skills/ai-dispatch/references/preferences.md)：`preferences.md` 怎么维护。
+- [技术篇](docs/technical.md)：协议、结果、扫描、运行记录和发布。
+- [架构设计](DESIGN.md)：模块边界与单次请求链路。
+- [配置参考](skills/ai-dispatch/references/config.md)：v2 字段、迁移与对应关系。
+- [偏好参考](skills/ai-dispatch/references/preferences.md)：场景偏好的维护边界。
+- [Provider Acceptance](docs/provider-acceptance.md)：真实验收标准。
+- [Changelog](CHANGELOG.md)：发布历史与变更。
