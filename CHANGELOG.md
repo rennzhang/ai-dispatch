@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Desktop model selector matching no longer assumes a preset label. A selector showing a routing group or a provider model (`dsf 自动路由 · routing group`, a bare model id) is found by the requested model's key, and a label that already carries that key counts as the committed preset, so `--surface app` stops failing with `no accessible model selector` when the app is on a non-OpenAI model.
+
 ## v0.11.0
 
 - Config schema v2 stores defaults, discovered providers and model-to-entry targets in one file. Default selection is OMP / CLI / Sol. Explicit entries take precedence; unlisted native model IDs pass through an explicitly selected entry without making the catalog a whitelist. One request executes one path; ordered candidate fallback is removed.

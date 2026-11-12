@@ -103,8 +103,26 @@ function axAction(ctx, element, action) {
   delay(0.05);
 }
 
+// Labels a model selector can carry besides a preset name: a routing group or
+// a provider model (magpie's "dsf 自动路由 · routing group", a bare model id).
+// The rest of the app's popups are chrome, and none of them is the selector.
+const CHROME_POPUP = /(探索|搜索|选项|操作|菜单|切换模式|更改权限|个人资料|Explore|Search|Options|Actions|Menu|Switch mode|Change permissions|Profile)/i;
+
+function modelLabelMatches(label, model) {
+  const key = desktopModelKey(label);
+  if (!key || !model) return false;
+  const wanted = desktopModelKey(String(model).replace(/^[^/]+\//, ''));
+  return wanted.length > 0 && key.indexOf(wanted) >= 0;
+}
+
+function isModelSelector(label, model) {
+  if (/^(GPT[- ]|o[134](?:\b|-)|选择推理强度$|Choose reasoning strength$)/i.test(label)) return true;
+  if (modelLabelMatches(label, model)) return true;
+  return Boolean(label) && !CHROME_POPUP.test(label);
+}
+
 function modelPopup(ctx) {
-  const popup = axFind(ctx, (element, role) => role === 'AXPopUpButton' && /^(GPT[- ]|o[134](?:\b|-)|选择推理强度$|Choose reasoning strength$)/i.test(axLabel(element)));
+  const popup = axFind(ctx, (element, role) => role === 'AXPopUpButton' && isModelSelector(axLabel(element), ctx.request.model));
   if (!popup) throw Error('The bound Desktop thread has no accessible model selector; no input was queued');
   return popup;
 }
@@ -159,16 +177,17 @@ function closeStrengthMenu(ctx) {
 }
 
 function chooseModel(ctx, model) {
-  if (!model || desktopPreset(axLabel(modelPopup(ctx))).model === desktopModelKey(model)) return;
+  const current = axLabel(modelPopup(ctx));
+  if (!model || desktopPreset(current).model === desktopModelKey(model) || modelLabelMatches(current, model)) return;
   const menu = strengthMenu(ctx);
   axAction(ctx, menuItem(ctx, menu, /^(选择模型|Select model|Choose model)$/i), 'AXPress');
   const choice = axWait(ctx, () => {
-    const item = axFind(ctx, (element, role) => role === 'AXMenuItem' && desktopModelKey(axLabel(element)) === desktopModelKey(model));
+    const item = axFind(ctx, (element, role) => role === 'AXMenuItem' && (desktopModelKey(axLabel(element)) === desktopModelKey(model) || modelLabelMatches(axLabel(element), model)));
     if (!item) throw Error('The requested model is not available in the Desktop model menu; no input was queued');
     return item;
   });
   axAction(ctx, choice, 'AXPress');
-  axWait(ctx, () => { if (desktopPreset(axLabel(modelPopup(ctx))).model !== desktopModelKey(model)) throw Error('The Desktop model selection was not committed; no input was queued'); return true; });
+  axWait(ctx, () => { const label = axLabel(modelPopup(ctx)); if (desktopPreset(label).model !== desktopModelKey(model) && !modelLabelMatches(label, model)) throw Error('The Desktop model selection was not committed; no input was queued'); return true; });
 }
 
 function postSettingsKey(ctx, key) {
@@ -262,7 +281,7 @@ function run(argv) {
     dismissModelMenus(ctx);
     initial = axWait(ctx, () => { const preset = desktopPreset(axLabel(modelPopup(ctx))); if (!preset.model) throw Error('The Desktop selector has no committed model label; no input was queued'); return preset; });
   }
-  if ((!request.model || initial.model === desktopModelKey(request.model)) &&
+  if ((!request.model || initial.model === desktopModelKey(request.model) || modelLabelMatches(initial.label, request.model)) &&
       (!request.effort || request.effort === 'auto' || initial.effort === request.effort) && initial.fast === request.fast) {
     return JSON.stringify({ pid: request.pid, title: request.title, preset: initial.label });
   }
