@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.11.1
 
 - OMP dispatch no longer inherits the caller's OMP instance variables. `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`, `PI_CONFIG_DIR`, `PI_CONFIG_FILES`, `PI_SESSION_FILE`, `PI_SESSION_ID`, `PI_ARTIFACTS_DIR`, `PI_EVAL_LOCAL_ROOTS` and `PI_TOOL_BRIDGE_*` describe the process that invoked ai-dispatch; forwarded to the child they pointed OMP at an empty config tree, so the first dispatch from an isolated OMP caller failed after ~10s with `Model "magpie/codex/gpt-6.1-sol" not found` and `failure_class: config` even though the same target succeeded from a plain shell. `providers scan` now reads the OMP catalog with the same environment, so it can no longer record an empty catalog from a redirected tree. Profile, model-role and debug `OMP_` / `PI_` variables still pass through.
 - An OMP model registry that resolves no models now reports the `models.yml` OMP actually used and keeps the log path plus the `PI_DEBUG_STARTUP=1` hint, instead of presenting OMP's API-key advice as the conclusion. OMP's `Still starting after 10s — phase: ...` line is a progress ticker, not a timeout, and no longer reads like one.
