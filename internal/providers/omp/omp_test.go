@@ -227,3 +227,28 @@ func TestBuildOMPRequiresPrompt(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestBuildOMPDropsCallerInstanceEnv(t *testing.T) {
+	fakeOMPBin(t)
+	target := routing.DispatchTarget{Requested: "sol", Provider: "omp", Model: "magpie/codex/gpt-6.1-sol"}
+	for _, key := range callerScopedEnv {
+		t.Setenv(key, "/tmp/isolated/"+key)
+	}
+	t.Setenv("OMP_PROFILE", "work")
+	t.Setenv("PI_SMOL_MODEL", "magpie/codex/gpt-6.1-sol")
+	spec, err := Provider{}.Build(providers.BuildRequest{Prompt: "hello", Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := "\n" + strings.Join(spec.Env, "\n") + "\n"
+	for _, key := range callerScopedEnv {
+		if strings.Contains(joined, "\n"+key+"=") {
+			t.Fatalf("caller-scoped %s reached the omp child: %q", key, joined)
+		}
+	}
+	for _, want := range []string{"\nOMP_PROFILE=work\n", "\nPI_SMOL_MODEL=magpie/codex/gpt-6.1-sol\n"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("intentional omp env %q dropped: %q", want, joined)
+		}
+	}
+}

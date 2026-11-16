@@ -10,6 +10,7 @@ import (
 	"github.com/rennzhang/ai-dispatch/internal/config"
 	"github.com/rennzhang/ai-dispatch/internal/providerinfo"
 	"github.com/rennzhang/ai-dispatch/internal/providers/codex"
+	"github.com/rennzhang/ai-dispatch/internal/providers/omp"
 )
 
 type ScanOptions struct {
@@ -166,7 +167,7 @@ func readModels(ctx context.Context, name, bin string, refresh bool) ([]discover
 		}
 		return out, err
 	case "omp":
-		raw, err := catalogCommand(ctx, bin, "models", "--json", "--no-extensions")
+		raw, err := catalogCommandEnv(ctx, bin, omp.ChildEnv(), "models", "--json", "--no-extensions")
 		if err != nil {
 			return nil, err
 		}

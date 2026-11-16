@@ -65,7 +65,33 @@ func (Provider) Build(req providers.BuildRequest) (runtime.CommandSpec, error) {
 	if len(stdin) == 0 {
 		return runtime.CommandSpec{}, fmt.Errorf("omp requires a prompt or --prompt-file")
 	}
-	return runtime.CommandSpec{Args: args, Env: runtime.SanitizedEnv(nil), Stdin: stdin}, nil
+	return runtime.CommandSpec{Args: args, Env: ChildEnv(), Stdin: stdin}, nil
+}
+
+// callerScopedEnv names omp variables that describe the process which invoked
+// ai-dispatch, not the omp process dispatch starts. PI_CODING_AGENT_DIR and the
+// other config roots redirect omp's whole config tree; inherited from a caller
+// running an isolated omp instance they point the child at an empty directory
+// with no models.yml, so an explicit --model fails as "Model ... not found"
+// even though the same model resolves from the user's own config.
+var callerScopedEnv = []string{
+	"PI_CODING_AGENT_DIR",
+	"PI_CODING_AGENT_SESSION_DIR",
+	"PI_CONFIG_DIR",
+	"PI_CONFIG_FILES",
+	"PI_SESSION_FILE",
+	"PI_SESSION_ID",
+	"PI_ARTIFACTS_DIR",
+	"PI_EVAL_LOCAL_ROOTS",
+	"PI_TOOL_BRIDGE_URL",
+	"PI_TOOL_BRIDGE_TOKEN",
+	"PI_TOOL_BRIDGE_SESSION",
+}
+
+// ChildEnv is the environment dispatch hands to omp. Model discovery uses it as
+// well, so a scanned catalog comes from the same config tree execution reads.
+func ChildEnv() []string {
+	return runtime.WithoutEnv(runtime.SanitizedEnv(nil), callerScopedEnv...)
 }
 
 func appendOMPOptions(args *[]string, opts map[string]string, sessionID string) error {

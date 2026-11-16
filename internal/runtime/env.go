@@ -77,6 +77,28 @@ func SanitizedEnv(overrides map[string]string) []string {
 	return out
 }
 
+// WithoutEnv removes caller-scoped variables from an environment slice built by
+// SanitizedEnv. Providers use it for variables that describe the process which
+// invoked ai-dispatch instead of the provider process dispatch starts.
+func WithoutEnv(env []string, keys ...string) []string {
+	if len(env) == 0 || len(keys) == 0 {
+		return env
+	}
+	drop := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		drop[key] = true
+	}
+	out := make([]string, 0, len(env))
+	for _, item := range env {
+		key, _, ok := strings.Cut(item, "=")
+		if ok && drop[key] {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
 func envAllowed(key string) bool {
 	if allowedEnvKeys[key] {
 		return true

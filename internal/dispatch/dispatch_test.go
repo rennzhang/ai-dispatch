@@ -521,3 +521,41 @@ echo '{"result":"OK","sessionID":"s1"}'
 		t.Fatal(err)
 	}
 }
+
+// A caller running an isolated omp instance exports PI_CODING_AGENT_DIR. If the
+// child omp inherits it, omp reads that empty config tree and an explicit model
+// fails as "not found"; dispatch must hand the child a clean instance env.
+func TestOMPChildDoesNotInheritCallerAgentDir(t *testing.T) {
+	t.Setenv("AI_DISPATCH_GO_PROVIDER_EXECUTION", "on")
+	t.Setenv("AI_DISPATCH_CONFIG", filepath.Join(t.TempDir(), "missing-config.json"))
+	t.Setenv("AI_DISPATCH_RUNS_DIR", t.TempDir())
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "child-env.txt")
+	bin := filepath.Join(dir, "omp")
+	script := "#!/bin/sh\nenv > " + envFile + "\n" +
+		`printf '%s\n' '{"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"pong"}]}}'` + "\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AI_DISPATCH_OMP_BIN", bin)
+	t.Setenv("PI_CODING_AGENT_DIR", filepath.Join(dir, "isolated-agent"))
+
+	result := Execute(contract.DispatchRequest{
+		Command: "send",
+		Target:  "omp",
+		Model:   "magpie/codex/gpt-6.1-sol",
+		Prompt:  "hello",
+	})
+	if !result.OK || result.Text != "pong" {
+		t.Fatalf("result=%+v", result)
+	}
+	env, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(env), "\n") {
+		if strings.HasPrefix(line, "PI_CODING_AGENT_DIR=") {
+			t.Fatalf("child inherited caller agent dir: %q", line)
+		}
+	}
+}

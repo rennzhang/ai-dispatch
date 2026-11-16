@@ -13,6 +13,17 @@ import (
 // which inherit stdout; deadline + WaitDelay bounds both the command and pipe
 // drain, and group cleanup prevents a canceled scan leaving those children.
 func catalogCommand(ctx context.Context, bin string, args ...string) ([]byte, error) {
+	return runCatalogCommand(ctx, bin, nil, args...)
+}
+
+// catalogCommandEnv runs a catalog command with an explicit environment. It
+// exists for CLIs whose catalog depends on a config tree that the caller may
+// have redirected; the catalog must come from the same tree execution reads.
+func catalogCommandEnv(ctx context.Context, bin string, env []string, args ...string) ([]byte, error) {
+	return runCatalogCommand(ctx, bin, env, args...)
+}
+
+func runCatalogCommand(ctx context.Context, bin string, env []string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
@@ -20,6 +31,9 @@ func catalogCommand(ctx context.Context, bin string, args ...string) ([]byte, er
 	var output limitedOutput
 	cmd.Stdout = &output
 	cmd.Stderr = &limitedOutput{}
+	if env != nil {
+		cmd.Env = env
+	}
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("catalog command failed")
 	}

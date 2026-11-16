@@ -247,7 +247,7 @@ ai-dispatch send omp "Reply exactly: OK" --model magpie/codex/gpt-6.1-sol \
   --provider-opt omp.session=none --json-result
 ```
 
-`omp.approval=always|default`，默认 always 追加 `--auto-approve`；`omp.session=persist|none`，none 追加 `--no-session`，不能同时 resume。`--effort` 映射 `--thinking`，none→off。子进程保留 `OMP_` / `PI_` 环境前缀；完整 selector 由 OMP 目录确认，Magpie 并非必选后端。
+`omp.approval=always|default`，默认 always 追加 `--auto-approve`；`omp.session=persist|none`，none 追加 `--no-session`，不能同时 resume。`--effort` 映射 `--thinking`，none→off。子进程保留 `OMP_` / `PI_` 里属于用户配置的变量（profile、模型角色、debug 开关），但不继承发起进程的 OMP 实例变量：`PI_CODING_AGENT_DIR`、`PI_CODING_AGENT_SESSION_DIR`、`PI_CONFIG_DIR`、`PI_CONFIG_FILES`、`PI_SESSION_FILE`、`PI_SESSION_ID`、`PI_ARTIFACTS_DIR`、`PI_EVAL_LOCAL_ROOTS`、`PI_TOOL_BRIDGE_*`。这些变量描述的是调用方，继承后子 OMP 会去读另一棵（通常是空的）配置树，显式 `--model` 就被报成 `Model ... not found`；`providers scan` 用同一套环境读 OMP 目录，避免把重定向后的空目录记成扫描结果。完整 selector 由 OMP 目录确认，Magpie 并非必选后端。
 
 Cursor 使用 `cursor-agent --print --output-format stream-json`；模型 ID 自带推理后缀时保留原 ID，不再叠精确 `--effort`。`cursor.approval=default|always`，默认只信任工作区，always 追加全自动批准。
 
@@ -271,6 +271,8 @@ ai-dispatch runs failures --since 24h
 | `network` | 网络问题 |
 | `runtime` | provider 进程或输出协议异常 |
 | `input` | 调用参数或 prompt 输入不合法 |
+
+OMP 的 `Model "<selector>" not found` 伴随 `Set an API key environment variable` 时归为 `config`：OMP 只在模型注册表没有任何可用模型时打印那段建议，所以 dispatch 先说明 OMP 实际使用的 `models.yml` 路径，并保留日志路径和 `PI_DEBUG_STARTUP=1` 复现提示，不再把 API-key 建议当作结论。OMP 的 `Still starting after Ns — phase: ...` 是每 10 秒一次的启动进度行，不是超时，也不代表进程被中止。
 
 ## Doctor
 

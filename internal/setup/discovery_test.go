@@ -2,6 +2,7 @@ package setup
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -203,5 +204,34 @@ func TestDiscoveryUsesConfiguredExecutableAndOnlyCatalogCommands(t *testing.T) {
 	item = discoverProvider("grok", false, missing)
 	if item.Report.Executable != missing || item.Report.Status != "unavailable" || item.Report.Surfaces["cli"].Status != "failed" {
 		t.Fatalf("invalid config silently fell back to another installation: %+v", item)
+	}
+}
+
+// A caller running an isolated omp instance exports PI_CODING_AGENT_DIR. Scan
+// must read the catalog from the config tree execution will use, not from the
+// caller's temporary one, which lists no models at all.
+func TestReadOMPModelsIgnoresCallerAgentDir(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "env.txt")
+	bin := filepath.Join(dir, "omp")
+	script := "#!/bin/sh\nenv > " + envFile + "\n" +
+		`printf '%s' '{"models":[{"provider":"magpie","id":"codex/gpt-6.1-sol","selector":"magpie/codex/gpt-6.1-sol","kind":"chat","thinking":["high"]}]}'` + "\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PI_CODING_AGENT_DIR", filepath.Join(dir, "isolated-agent"))
+	models, err := readModels(context.Background(), "omp", bin, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 1 || models[0].ID != "magpie/codex/gpt-6.1-sol" || !reflect.DeepEqual(models[0].Efforts, []string{"high"}) {
+		t.Fatalf("models=%+v", models)
+	}
+	env, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(env, []byte("PI_CODING_AGENT_DIR=")) {
+		t.Fatalf("scan inherited caller agent dir: %q", env)
 	}
 }

@@ -104,7 +104,52 @@ func Classify(provider string, stdout string, stderr string, runError string) Fa
 	if strings.EqualFold(provider, "Antigravity") && strings.TrimSpace(message) == "agy completed without output" {
 		message = "agy completed without output; verify agy login and Chrome authorization before retrying"
 	}
+
+	if strings.EqualFold(provider, "OMP") {
+		message = rewriteOMPRegistryMessage(message)
+	}
 	return Failure{Status: status, Class: class, Stderr: message}
+}
+
+// ompEmptyRegistryAdvice is what omp prints when its model registry holds no
+// available models at all; omp then guesses that no API key is configured. When
+// the registry is empty because omp loaded a different config tree, that guess
+// hides the real cause, so dispatch names the config file omp used instead.
+const ompEmptyRegistryAdvice = "Set an API key environment variable"
+
+func rewriteOMPRegistryMessage(message string) string {
+	if !strings.Contains(message, ompEmptyRegistryAdvice) {
+		return message
+	}
+	model := ""
+	modelsPath := ""
+	evidence := make([]string, 0, 4)
+	for _, line := range strings.Split(message, "\n") {
+		switch {
+		case strings.HasPrefix(line, ompEmptyRegistryAdvice), strings.HasPrefix(line, "ANTHROPIC_API_KEY"):
+		case strings.HasPrefix(line, "Or create "):
+			modelsPath = strings.TrimSpace(strings.TrimPrefix(line, "Or create "))
+		case strings.HasPrefix(line, `Model "`):
+			rest := strings.TrimPrefix(line, `Model "`)
+			if end := strings.Index(rest, `"`); end > 0 {
+				model = rest[:end]
+			}
+		default:
+			evidence = append(evidence, line)
+		}
+	}
+	diagnosis := "omp's model registry is empty"
+	if modelsPath != "" {
+		diagnosis += " (models.yml: " + modelsPath + ")"
+	}
+	if model != "" {
+		diagnosis += `: model "` + model + `" is not listed there`
+	}
+	diagnosis += ". omp's API-key hint applies only when no provider is configured; check that this is the omp config you expect."
+	if len(evidence) == 0 {
+		return diagnosis
+	}
+	return diagnosis + "\n" + strings.Join(evidence, "\n")
 }
 
 // Error events often arrive on stdout while stderr contains nothing. Only

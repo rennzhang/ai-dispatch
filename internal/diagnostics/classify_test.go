@@ -152,6 +152,41 @@ func TestClassifyCursorNodeNetworkErrorsAsNetwork(t *testing.T) {
 	}
 }
 
+func TestClassifyOMPEmptyModelRegistryNamesItsConfigFile(t *testing.T) {
+	stderr := strings.Join([]string{
+		"Still starting after 10s — phase: createAgentSession > resolveModelDiscoveryFallbackNonRuntime",
+		"logs: /Users/x/.omp/logs/omp.2026-11-16.22311.log · re-run with PI_DEBUG_STARTUP=1 for streaming phase markers",
+		`Model "magpie/codex/gpt-6.1-sol" not found`,
+		"Set an API key environment variable:",
+		"  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.",
+		"Or create /var/folders/tmp.abc/models.yml",
+	}, "\n")
+	got := Classify("OMP", "", stderr, "exit status 1")
+	if got.Status != contract.StatusError || got.Class != contract.FailureConfig {
+		t.Fatalf("got=%+v", got)
+	}
+	for _, want := range []string{
+		`model "magpie/codex/gpt-6.1-sol" is not listed there`,
+		"models.yml: /var/folders/tmp.abc/models.yml",
+		"Still starting after 10s — phase: createAgentSession > resolveModelDiscoveryFallbackNonRuntime",
+		"logs: /Users/x/.omp/logs/omp.2026-11-16.22311.log · re-run with PI_DEBUG_STARTUP=1 for streaming phase markers",
+	} {
+		if !strings.Contains(got.Stderr, want) {
+			t.Fatalf("stderr=%q missing %q", got.Stderr, want)
+		}
+	}
+	if strings.Contains(got.Stderr, "Set an API key environment variable") || strings.Contains(got.Stderr, "ANTHROPIC_API_KEY") {
+		t.Fatalf("misleading omp advice survived: %q", got.Stderr)
+	}
+}
+
+func TestClassifyOMPAuthFailureKeepsProviderMessage(t *testing.T) {
+	got := Classify("OMP", "", "Not logged in · Please run /login", "")
+	if got.Class != contract.FailureConfig || got.Stderr != "Not logged in · Please run /login" {
+		t.Fatalf("got=%+v", got)
+	}
+}
+
 func TestNoResultMessageSummarizesStreamShape(t *testing.T) {
 	got := NoResultMessage("OpenCode", "{\"type\":\"session.updated\"}\n{\"event\":\"done\"}\nplain\n", "", 1)
 	for _, want := range []string{"stdout_events=2", "last_event=done", "non_json_stdout_lines=1", "exit_code=1"} {

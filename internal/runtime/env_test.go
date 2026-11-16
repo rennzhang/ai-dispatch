@@ -30,3 +30,16 @@ func TestSanitizedEnvKeepsOMPPrefix(t *testing.T) {
 		t.Fatalf("PI_SMOL_MODEL missing from sanitized env: %q", joined)
 	}
 }
+
+func TestWithoutEnvDropsOnlyNamedKeys(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "/tmp/isolated-agent")
+	t.Setenv("OMP_PROFILE", "work")
+	env := WithoutEnv(SanitizedEnv(nil), "PI_CODING_AGENT_DIR")
+	joined := strings.Join(env, "\n")
+	if strings.Contains(joined, "PI_CODING_AGENT_DIR=") {
+		t.Fatalf("PI_CODING_AGENT_DIR survived WithoutEnv: %q", joined)
+	}
+	if !strings.Contains(joined, "OMP_PROFILE=work") {
+		t.Fatalf("unrelated key dropped: %q", joined)
+	}
+}
